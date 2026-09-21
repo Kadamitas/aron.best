@@ -243,10 +243,8 @@ export async function createApp(configuration = readConfiguration(), dependencie
     const manifest = await pack.exportManifest();
     const controller = await remote?.refresh();
     const target = controller?.workspace.server ?? minecraft.status();
-    // Mods with known CurseForge ids are listed for the CurseForge App to install and track; only the rest ship as override JARs.
-    const managed = (await pack.getPack()).mods.map((mod) => ({ projectID: mod.id, fileID: mod.fileId, required: true, fileName: mod.version, name: mod.name,
-      ...(mod.websiteUrl ? { websiteUrl: mod.websiteUrl } : {}), ...(mod.author ? { author: mod.author } : {}) }));
-    const archive = remote ? await remote.workspace.exportArchive({ ...manifest, minecraft: { version: target.version, modLoaders: [{ id: `${target.loader.toLowerCase()}-${target.loaderVersion}`, primary: true }] }, name: configuration.WORKSHOP_NAME, files: managed, version: manifest.version }) : undefined;
+    // Every installed mod ships as a JAR under overrides so the pack imports without any CurseForge lookups; files stays empty.
+    const archive = remote ? await remote.workspace.exportArchive({ ...manifest, minecraft: { version: target.version, modLoaders: [{ id: `${target.loader.toLowerCase()}-${target.loaderVersion}`, primary: true }] }, name: configuration.WORKSHOP_NAME, files: [], version: manifest.version }) : undefined;
     const localArchive = archive ? undefined : await pack.exportArchive();
     return reply
       .type('application/zip')
