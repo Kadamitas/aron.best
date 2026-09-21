@@ -176,13 +176,51 @@ export class WorkshopComponent {
   constructor() {
     void this.refresh();
     const timer = setInterval(() => {
-      const interval = this.operationStatus() || this.serverTransitioning() ? 3_000 : 15_000;
+      // With the live connection open, polling is only a safety net.
+      const interval = this.operationStatus() || this.serverTransitioning() ? (this.live() ? 10_000 : 3_000) : this.live() ? 60_000 : 15_000;
       if (document.visibilityState === 'visible' && !this.busy() && !this.statusInFlight && this.profileOperation()?.accepted !== false && Date.now() - this.lastStatusRefresh >= interval) void this.refresh(false);
     }, 3_000);
     // Polling pauses while the tab is hidden; catch up the moment it is visible again.
     const onVisible = () => { if (document.visibilityState === 'visible' && !this.busy() && !this.statusInFlight) void this.refresh(false); };
     document.addEventListener('visibilitychange', onVisible);
-    this.destroyRef.onDestroy(() => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); });
+    this.destroyRef.onDestroy(() => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); this.disconnectLive(); });
+  }
+
+  /** True while the API is pushing updates over its live connection. */
+  readonly live = signal(false);
+  private liveSource: EventSource | null = null;
+  private liveFailures = 0;
+  private liveRetry?: ReturnType<typeof setTimeout>;
+  private liveRefresh?: ReturnType<typeof setTimeout>;
+
+  private connectLive(): void {
+    if (this.liveSource || this.liveFailures >= 3) return;
+    const source = this.api.events();
+    if (!source) return;
+    this.liveSource = source;
+    source.onopen = () => { this.liveFailures = 0; this.live.set(true); };
+    source.addEventListener('status', () => {
+      clearTimeout(this.liveRefresh);
+      this.liveRefresh = setTimeout(() => { if (!this.busy() && !this.statusInFlight) void this.refresh(false); }, 300);
+    });
+    source.addEventListener('log', event => {
+      const delta = JSON.parse((event as MessageEvent<string>).data) as { reset: boolean; lines: string[] };
+      this.logs.set(delta.reset ? delta.lines : [...this.logs(), ...delta.lines].slice(-250));
+    });
+    source.onerror = () => {
+      this.disconnectLive();
+      this.liveFailures++;
+      clearTimeout(this.liveRetry);
+      if (this.liveFailures < 3) this.liveRetry = setTimeout(() => this.connectLive(), 10_000);
+    };
+  }
+
+  private disconnectLive(): void {
+    this.liveSource?.close();
+    this.liveSource = null;
+    this.live.set(false);
+    clearTimeout(this.liveRetry);
+    clearTimeout(this.liveRefresh);
   }
 
   async refresh(showLoading = true): Promise<void> {
@@ -209,6 +247,7 @@ export class WorkshopComponent {
       // Logs and mod lists refresh alongside status, but they must never hold the
       // status poll hostage: a slow log request during a restart froze the page.
       if (status.capabilities.authorized) void Promise.all([this.loadLogs(true), this.loadServerMods()]);
+      if (status.capabilities.authorized) this.connectLive();
     } catch (error) {
       if (request === this.statusRequest) {
         this.connectionError.set(errorMessage(error));

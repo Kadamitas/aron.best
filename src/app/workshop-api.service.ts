@@ -273,6 +273,11 @@ export class WorkshopApi {
     return firstValueFrom(this.http.post('/api/pack/publish', { displayName, changelog }, { headers: this.headers }));
   }
 
+  /** One open connection the API pushes state changes and new log lines through. */
+  events(): EventSource | null {
+    return typeof EventSource === 'undefined' ? null : new EventSource('/api/events');
+  }
+
   logs(): Promise<{ lines: string[] }> {
     return firstValueFrom(this.http.get<{ lines: string[] }>('/api/server/logs', { headers: this.headers }).pipe(timeout(20_000)));
   }

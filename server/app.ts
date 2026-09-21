@@ -356,6 +356,63 @@ export async function createApp(configuration = readConfiguration(), dependencie
     return reply.code(202).send(await remote!.install(target));
   });
   app.get('/api/server/logs', async () => ({ lines: await minecraft.logs() }));
+
+  // Live updates: each browser keeps one open connection and the API pushes a
+  // "status" event when the server's state changes and a "log" event with the
+  // new log lines, checked once a second while anyone is connected.
+  type LiveClient = { send: (event: string, data: unknown) => void; end: () => void; keepalive?: NodeJS.Timeout; lastLines: string[]; lastSnapshot: string };
+  const liveClients = new Set<LiveClient>();
+  let liveTicker: NodeJS.Timeout | undefined;
+  const logDelta = (previous: string[], current: string[]): { reset: boolean; lines: string[] } => {
+    if (!previous.length) return { reset: true, lines: current };
+    const anchor = previous[previous.length - 1];
+    const before = previous.length > 1 ? previous[previous.length - 2] : undefined;
+    for (let index = current.length - 1; index >= 0; index--) {
+      if (current[index] === anchor && (before === undefined || index === 0 || current[index - 1] === before)) return { reset: false, lines: current.slice(index + 1) };
+    }
+    return { reset: true, lines: current };
+  };
+  const liveTick = async () => {
+    if (!liveClients.size) return;
+    try {
+      const controller = await remote?.refresh();
+      const server = controller?.server ?? minecraft.status();
+      const snapshot = JSON.stringify({ state: server.state, busy: server.busy, operation: controller?.server.operation ?? jobOperation ?? null, jobRunning: jobRunning || server.busy,
+        failure: server.failure?.at ?? null, lastBackup: server.lastBackup, players: server.players?.online ?? null, active: controller?.profiles.activeId ?? null,
+        installationError: controller?.server.installationError ?? null, activity: activity[0]?.id ?? null });
+      const lines = await minecraft.logs();
+      for (const client of liveClients) {
+        if (client.lastSnapshot !== snapshot) { client.lastSnapshot = snapshot; client.send('status', JSON.parse(snapshot)); }
+        const delta = logDelta(client.lastLines, lines);
+        if (delta.reset || delta.lines.length) client.send('log', delta);
+        client.lastLines = lines;
+      }
+    } catch (error) { app.log.warn({ message: (error as Error).message }, 'Live update check failed'); }
+  };
+  app.get('/api/events', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
+    if (liveClients.size >= 32) return reply.code(503).send({ error: 'Too many live connections. Try again in a moment.' });
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    raw.write(': connected\n\n');
+    const client: LiveClient = { lastLines: [], lastSnapshot: '', send: (event, data) => { raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }, end: () => raw.end() };
+    client.keepalive = setInterval(() => raw.write(': keepalive\n\n'), 15_000);
+    liveClients.add(client);
+    if (!liveTicker) liveTicker = setInterval(() => { void liveTick(); }, 1_000);
+    void liveTick();
+    const release = () => {
+      clearInterval(client.keepalive);
+      liveClients.delete(client);
+      if (!liveClients.size && liveTicker) { clearInterval(liveTicker); liveTicker = undefined; }
+    };
+    request.raw.once('close', release);
+    raw.once('close', release);
+  });
+  app.addHook('onClose', async () => {
+    for (const client of liveClients) { clearInterval(client.keepalive); client.end(); }
+    liveClients.clear();
+    if (liveTicker) { clearInterval(liveTicker); liveTicker = undefined; }
+  });
   app.get('/api/server/recovery', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async () => {
     if (!remote) throw Object.assign(new Error('Recovery requires the isolated Minecraft container.'), { statusCode: 409 });
     return remote.recovery();

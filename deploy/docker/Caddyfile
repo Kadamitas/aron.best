@@ -22,6 +22,8 @@
 	header -Server
 	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	reverse_proxy app:3000 {
+		# Stream responses as they are written so live events reach the browser at once.
+		flush_interval -1
 		header_up Host {host}
 		header_up X-Real-IP {remote_host}
 		header_up X-Forwarded-For {remote_host}
