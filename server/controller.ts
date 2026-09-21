@@ -12,6 +12,8 @@ import { withSecrets } from './secrets.js';
 import { LoaderInstallation, type ServerTarget } from './loader-installation.js';
 import { assertInstallationPresent, writeServerDefaults } from './container-bootstrap.js';
 import { ServerProfiles } from './server-profiles.js';
+import { createBackupArchive, downloadBackup, type BackupArtifact, type BackupJob } from './backup-archive.js';
+import { WorkspaceActivity } from './workspace-activity.js';
 
 const configurationSchema = z.object({
   HOST: z.enum(['0.0.0.0', '127.0.0.1']).default('0.0.0.0'),
@@ -69,7 +71,9 @@ export async function createController(configuration = readControllerConfigurati
       requireOnlineMode: Boolean(gateway), onLog: line => gateway?.observeLog(line),
     }, dependencies.minecraft);
     await server.initialize();
-    return { directory, server, files: new ModpackFiles(directory), installations: installerFor(directory, line => server.appendLog(`[Installation] ${line}`)), installationError: undefined as string | undefined };
+    const changes = new WorkspaceActivity(root);
+    await changes.initialize();
+    return { directory, server, changes, files: new ModpackFiles(directory), installations: installerFor(directory, line => server.appendLog(`[Installation] ${line}`)), installationError: undefined as string | undefined };
   }
   type Runtime = Awaited<ReturnType<typeof runtimeFor>>;
   const runtimes = new Map<string, Promise<Runtime>>();
@@ -95,6 +99,9 @@ export async function createController(configuration = readControllerConfigurati
   let profileTask: Promise<void> | undefined;
   let working = false;
   let mutationRevision = 0;
+  const backupJobs = new Map<string, { job: BackupJob; artifact?: BackupArtifact }>();
+  const backupTasks = new Set<Promise<void>>();
+  let backupDownloads = 0;
   const profileContext = new AsyncLocalStorage<{ id?: string; workspaceId?: string }>();
   async function listProfiles() {
     const revision = mutationRevision;
@@ -128,7 +135,24 @@ export async function createController(configuration = readControllerConfigurati
   }
   async function workspaceOperation<T>(operation: (runtime: Runtime) => Promise<T>, fileWrite = true): Promise<T> {
     const { id, runtime } = await workspaceRuntime();
-    return exclusive(async () => { profiles.directoryFor(id); return operation(runtime); }, fileWrite, runtime);
+    return exclusive(async () => {
+      profiles.directoryFor(id);
+      const result = await operation(runtime);
+      if (fileWrite) await runtime.changes.changed();
+      return result;
+    }, fileWrite, runtime);
+  }
+  async function workspaceUpload<T>(operation: (runtime: Runtime, newModOnly: boolean) => Promise<T>, completed = false): Promise<T> {
+    const { id, runtime } = await workspaceRuntime();
+    return exclusive(async () => {
+      assertIsolated();
+      profiles.directoryFor(id);
+      const state = runtime.server.status().state;
+      if (!['stopped', 'not-installed', 'failed', 'running'].includes(state) || runtime.server.status().busy) throw Object.assign(new Error('Wait for the selected server operation to finish before uploading files.'), { statusCode: 409 });
+      const result = await operation(runtime, state === 'running');
+      if (completed) await runtime.changes.changed();
+      return result;
+    }, false, runtime);
   }
   async function activate(id: string) {
     const next = await runtimeForProfile(id);
@@ -163,7 +187,7 @@ export async function createController(configuration = readControllerConfigurati
     const digest = (value: string) => createHash('sha256').update(value).digest();
     if (candidate.length > 256 || !timingSafeEqual(digest(candidate), digest(configuration.CONTROLLER_TOKEN))) return reply.code(401).send({ error: 'Controller authentication required.' });
     reply.header('Cache-Control', 'no-store');
-    if (!['/status', '/versions'].includes(request.routeOptions.url ?? '')) assertProfile();
+    if (!['/status', '/versions', '/backups/:id', '/backups/:id/download'].includes(request.routeOptions.url ?? '')) assertProfile();
   });
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof z.ZodError) return reply.code(400).send({ error: 'Invalid controller request.' });
@@ -178,7 +202,7 @@ export async function createController(configuration = readControllerConfigurati
   app.get('/status', async () => {
     const { id, runtime } = await workspaceRuntime(true);
     const saved = await listProfiles();
-    return { server: { ...runtimeStatus(activeRuntime), ...(profileError ? { profileError } : {}) }, workspace: { profileId: id, server: runtimeStatus(runtime) }, profiles: saved, profileBindingRequired: profiles.requiresProfileBinding(), isolated, activity, joins };
+    return { server: { ...runtimeStatus(activeRuntime), ...(profileError ? { profileError } : {}) }, workspace: { profileId: id, server: runtimeStatus(runtime), updatedAt: runtime.changes.updatedAt }, profiles: saved, profileBindingRequired: profiles.requiresProfileBinding(), isolated, activity, joins };
   });
   app.get('/logs', async () => ({ lines: server.logs() }));
   app.get('/crash', async () => server.latestCrashReport());
@@ -205,6 +229,7 @@ export async function createController(configuration = readControllerConfigurati
         await installer.install({ ...target, loaderVersion: compatible.loaderVersion });
       });
       await activate(created.id);
+      await activeRuntime.changes.changed();
       record(`Created saved server ${name} with a blank world, mods, and configuration.`);
     });
     return reply.code(202).send({ accepted: true });
@@ -252,6 +277,7 @@ export async function createController(configuration = readControllerConfigurati
       await runtime.files.close();
       await runtime.installations.install(target);
       await runtime.server.initialize();
+      await runtime.changes.changed();
       record(`Installed Minecraft ${target.minecraftVersion} with ${target.loader} ${target.loaderVersion}. Server remains stopped.`);
     }, true, runtime).catch(error => {
       runtime.installationError = error instanceof Error ? error.message : 'Server installation failed.';
@@ -262,11 +288,67 @@ export async function createController(configuration = readControllerConfigurati
   });
   app.post('/action', { bodyLimit: 256 * 1024 }, async request => {
     const body = z.object({ action: z.enum(['start', 'stop', 'restart', 'backup', 'update', 'sync-profile']), downloads: z.array(downloadSchema).max(150).optional() }).strict().parse(request.body);
-    await exclusive(() => server.action(body.action, async () => {
-      if (!body.downloads) throw new Error('No verified mod download list was provided.');
-      return body.downloads;
-    }));
+    await exclusive(async () => {
+      await server.action(body.action, async () => {
+        if (!body.downloads) throw new Error('No verified mod download list was provided.');
+        return body.downloads;
+      });
+      if (body.action === 'update' || body.action === 'sync-profile') await activeRuntime.changes.changed();
+    });
     return { completed: true };
+  });
+  app.post('/backups', async (request, reply) => {
+    z.object({}).strict().parse(request.body);
+    assertIsolated();
+    assertProfile();
+    if (working || server.status().busy) throw Object.assign(new Error('Wait for the current server operation before creating a backup.'), { statusCode: 409 });
+    if (backupJobs.size >= 100) {
+      const oldest = [...backupJobs].find(([, entry]) => entry.job.state !== 'running');
+      if (oldest) backupJobs.delete(oldest[0]);
+    }
+    const job: BackupJob = { id: randomUUID(), profileId: profiles.activeId(), state: 'running' };
+    const entry: { job: BackupJob; artifact?: BackupArtifact } = { job };
+    const runtime = activeRuntime;
+    backupJobs.set(job.id, entry);
+    const task = exclusive(async () => {
+      await runtime.files.close();
+      const snapshot = await runtime.server.action('backup');
+      if (!snapshot) throw new Error('The backup did not produce a saved snapshot.');
+      entry.artifact = await createBackupArchive(snapshot);
+      job.filename = `dictionary-minecraft-backup-${path.basename(snapshot)}.tar.gz`;
+      job.state = 'ready';
+      record('A server backup is saved and ready to download.');
+    }).catch(error => {
+      job.state = 'failed';
+      job.error = typeof error?.statusCode === 'number' && error.statusCode >= 400 && error.statusCode < 500 ? error.message : 'The backup could not be prepared. Check Server Log for details.';
+      runtime.server.appendLog(`[Backup] ${error instanceof Error ? error.message : 'Backup failed.'}`);
+      record('The server backup could not be prepared.');
+    }).finally(() => backupTasks.delete(task));
+    backupTasks.add(task);
+    return reply.code(202).send({ id: job.id, profileId: job.profileId });
+  });
+  function backupJob(params: unknown) {
+    const { id } = z.object({ id: z.string().uuid() }).parse(params);
+    const entry = backupJobs.get(id);
+    if (!entry) throw Object.assign(new Error('That backup session is no longer available. Saved snapshots remain on the server.'), { statusCode: 404 });
+    return entry;
+  }
+  app.get('/backups/:id', async request => backupJob(request.params).job);
+  app.get('/backups/:id/download', async (request, reply) => {
+    const entry = backupJob(request.params);
+    if (entry.job.state !== 'ready' || !entry.artifact) throw Object.assign(new Error(entry.job.error ?? 'This backup is still being prepared.'), { statusCode: 409 });
+    if (backupDownloads >= 2) throw Object.assign(new Error('Two backup downloads are already in progress. Try again shortly.'), { statusCode: 429 });
+    backupDownloads++;
+    let released = false;
+    const release = () => { if (!released) { released = true; backupDownloads--; } };
+    try {
+      const archive = await downloadBackup(entry.artifact);
+      const timeout = setTimeout(() => archive.stream.destroy(new Error('The backup download timed out.')), 30 * 60_000);
+      timeout.unref();
+      archive.stream.once('close', () => { clearTimeout(timeout); release(); });
+      reply.raw.once('close', () => archive.stream.destroy());
+      return reply.type('application/gzip').header('Content-Disposition', `attachment; filename="${entry.job.filename}"`).header('Content-Length', archive.size).send(archive.stream);
+    } catch (error) { release(); throw error; }
   });
   app.get('/workspace/files', async () => (await workspaceRuntime()).runtime.files.list());
   app.get('/workspace/mods', async () => (await workspaceRuntime()).runtime.files.listMods());
@@ -311,17 +393,17 @@ export async function createController(configuration = readControllerConfigurati
   });
   app.post('/workspace/uploads', async request => {
     const body = z.object({ path: filePathSchema, size: z.number().int().positive().max(128 * 1024 ** 2), replace: z.boolean(), address: addressSchema }).strict().parse(request.body);
-    return workspaceOperation(runtime => runtime.files.beginUpload(body.path, body.size, body.replace, body.address));
+    return workspaceUpload((runtime, newModOnly) => runtime.files.beginUpload(body.path, body.size, body.replace, body.address, newModOnly));
   });
   app.post('/workspace/uploads/:id/chunks', { bodyLimit: 800_000 }, async request => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({ index: z.number().int().nonnegative(), data: z.string().min(1).max(750_000), address: addressSchema }).strict().parse(request.body);
-    return workspaceOperation(runtime => runtime.files.appendUpload(id, body.index, body.data, body.address));
+    return workspaceUpload((runtime, newModOnly) => runtime.files.appendUpload(id, body.index, body.data, body.address, newModOnly));
   });
   app.post('/workspace/uploads/:id/complete', async request => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { address } = z.object({ address: addressSchema }).strict().parse(request.body);
-    const result = await workspaceOperation(runtime => runtime.files.finishUpload(id, address));
+    const result = await workspaceUpload((runtime, newModOnly) => runtime.files.finishUpload(id, address, newModOnly), true);
     record(`Uploaded ${result.path}`);
     return result;
   });
@@ -340,7 +422,7 @@ export async function createController(configuration = readControllerConfigurati
     }).strict() }).strict().parse(request.body);
     const archive = await workspaceOperation(async runtime => {
       const target = runtime.server.status();
-      if (!['stopped', 'not-installed', 'failed'].includes(target.state)) throw Object.assign(new Error('Stop the selected Minecraft server before downloading a consistent pack snapshot.'), { statusCode: 409 });
+      if (!['stopped', 'not-installed', 'failed', 'running'].includes(target.state)) throw Object.assign(new Error('Wait for the selected Minecraft server operation before downloading the modpack.'), { statusCode: 409 });
       if (manifest.minecraft.version !== target.version || manifest.minecraft.modLoaders[0]?.id !== `${target.loader.toLowerCase()}-${target.loaderVersion}`) {
         throw Object.assign(new Error('The pack target does not match the installed server.'), { statusCode: 409 });
       }
@@ -355,6 +437,7 @@ export async function createController(configuration = readControllerConfigurati
   app.addHook('onClose', async () => {
     await installationTask;
     await profileTask;
+    await Promise.all(backupTasks);
     for (const pending of runtimes.values()) {
       const runtime = await pending;
       await runtime.server.shutdown();

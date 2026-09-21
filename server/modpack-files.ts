@@ -68,6 +68,7 @@ interface UploadSession {
   received: number;
   nextChunk: number;
   baseline: string | null;
+  replace: boolean;
   expiresAt: number;
 }
 
@@ -85,6 +86,12 @@ function pathParts(value: string): string[] {
   if (parts.length > maximumDepth + 3 || parts.some(part => !part || Buffer.byteLength(part) > 240 || part === '.' || part === '..' || part.startsWith('.') || /[\x00-\x1f\x7f:]/.test(part))) throw new ModpackFilesError('Use a valid workspace-relative file path.');
   if (!roots.some(root => parts.length > root.length && root.every((part, index) => parts[index] === part))) throw new ModpackFilesError('That file is outside the modpack workspace.');
   return parts;
+}
+function assertNewMod(filePath: string, replace: boolean, baseline: string | null = null): void {
+  const parts = pathParts(filePath);
+  if (parts.length !== 2 || parts[0] !== 'mods' || !/\.jar$/i.test(parts[1]!) || replace || baseline !== null) {
+    throw new ModpackFilesError('While the server is running, only new JAR files can be added to the mods folder. Stop it before replacing mods or changing other files.', 409);
+  }
 }
 function fileMetadata(relative: string, info: Stats): ModpackFile {
   return { path: relative, name: path.basename(relative), size: info.size, modifiedAt: info.mtime.toISOString(), text: editableFile(relative) };
@@ -314,10 +321,11 @@ export class ModpackFiles {
     });
   }
 
-  async beginUpload(filePath: string, size: number, replace: boolean, address: string): Promise<{ id: string; chunkBytes: number }> {
+  async beginUpload(filePath: string, size: number, replace: boolean, address: string, newModOnly = false): Promise<{ id: string; chunkBytes: number }> {
     return this.exclusive(async () => {
       await this.clearExpired();
       const parts = pathParts(filePath);
+      if (newModOnly) assertNewMod(filePath, replace);
       if (!Number.isSafeInteger(size) || size < 1 || size > maximumFileBytes) throw new ModpackFilesError('Uploads must be between 1 byte and 128 MiB.', 413);
       if (this.sessions.size >= 8 || [...this.sessions.values()].filter(session => session.address === address).length >= 2) throw new ModpackFilesError('Too many uploads are in progress. Try again shortly.', 429);
       if ([...this.sessions.values()].some(session => session.destination === filePath)) throw new ModpackFilesError('An upload to that file is already in progress.', 409);
@@ -335,7 +343,7 @@ export class ModpackFiles {
         await this.checkQuota(size, current?.info.size ?? 0);
         await this.assertDirectory(directory);
         handle = await open(path.join(directory.anchored, temporary), constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-        this.sessions.set(id, { id, address, destination: filePath, directory, handle, temporary, size, received: 0, nextChunk: 0, baseline: current?.token ?? null, expiresAt: Date.now() + uploadLifetime });
+        this.sessions.set(id, { id, address, destination: filePath, directory, handle, temporary, size, received: 0, nextChunk: 0, baseline: current?.token ?? null, replace, expiresAt: Date.now() + uploadLifetime });
         this.scheduleCleanup();
         return { id, chunkBytes: maximumChunkBytes };
       } catch (error) {
@@ -346,10 +354,11 @@ export class ModpackFiles {
     });
   }
 
-  async appendUpload(id: string, index: number, encoded: string, address: string): Promise<{ received: number; complete: boolean }> {
+  async appendUpload(id: string, index: number, encoded: string, address: string, newModOnly = false): Promise<{ received: number; complete: boolean }> {
     return this.exclusive(async () => {
       await this.clearExpired();
       const session = this.session(id, address);
+      if (newModOnly) assertNewMod(session.destination, session.replace, session.baseline);
       if (!Number.isSafeInteger(index) || index !== session.nextChunk) throw new ModpackFilesError('Upload chunks must arrive in order.', 409);
       if (encoded.length > Math.ceil(maximumChunkBytes / 3) * 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) throw new ModpackFilesError('The upload chunk is not valid base64 data.');
       const bytes = Buffer.from(encoded, 'base64');
@@ -373,10 +382,11 @@ export class ModpackFiles {
     });
   }
 
-  async finishUpload(id: string, address: string): Promise<ModpackFile> {
+  async finishUpload(id: string, address: string, newModOnly = false): Promise<ModpackFile> {
     return this.exclusive(async () => {
       await this.clearExpired();
       const session = this.session(id, address);
+      if (newModOnly) assertNewMod(session.destination, session.replace, session.baseline);
       if (session.received !== session.size) throw new ModpackFilesError('The upload is not complete yet.', 409);
       try {
         const parts = pathParts(session.destination);

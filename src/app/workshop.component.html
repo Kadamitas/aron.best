@@ -19,7 +19,6 @@
           <span class="saved-label">Editing</span>
           <button class="profile-choice" mat-stroked-button [matMenuTriggerFor]="profileMenu" [disabled]="!workspaceReady()" aria-label="Select saved server"><app-icon name="server"/><span>{{ workspaceProfile()?.name || 'Current server' }}</span><app-icon class="profile-chevron" name="arrow-down"/></button>
           @if (workspaceId() !== saved.activeId) { <button class="set-active" mat-stroked-button (click)="setActiveProfile()" [disabled]="!profilesReady()">Set active</button> } @else { <span class="active-badge">Active</span> }
-          <span class="profile-count">{{ saved.profiles.length }} / {{ saved.limit }}</span>
           <button class="new-server" mat-button (click)="createProfile()" [disabled]="!canCreateProfile()" [matTooltip]="saved.profiles.length >= saved.limit ? 'Delete a saved server to make room' : 'Create a blank server and keep this one'"><app-icon matButtonIcon name="plus"/>New server</button>
           <button class="manage-servers" mat-icon-button [matMenuTriggerFor]="manageProfilesMenu" [disabled]="!profilesReady()" aria-label="Manage saved servers"><span aria-hidden="true">⋯</span></button>
         </section>
@@ -30,15 +29,15 @@
       @if (profileOperationError() || (!profileOperation() && current.server.profileError); as error) { <div class="notice error" role="alert"><div><strong>Saved server change failed.</strong> {{ error }}</div></div> }
       @if (!authorized()) { <div class="notice">Open your invite link or join the Minecraft server to access this workspace.</div> }
       <section class="server-strip" aria-label="Server controls">
-        <div class="active-server"><span class="active-server-name">Active: {{ activeProfile()?.name || 'Current server' }}</span><div class="server-state"><i [class.online]="serverRunning()" [class.working]="serverTransitioning()"></i><strong>{{ serverTransitioning() ? 'Working' : current.server.state }}</strong><span>{{ uptime() }}</span></div></div>
+        <div class="active-server"><span class="active-server-name">Active: {{ activeProfile()?.name || 'Current server' }}</span><div class="server-state"><i [class.online]="serverRunning()" [class.working]="serverTransitioning()"></i><strong>{{ serverTransitioning() ? 'Working' : current.server.state }}</strong><span class="server-uptime">{{ uptime() }}</span><button type="button" class="player-count" [matTooltip]="playerNames()" matTooltipClass="player-list-tooltip" matTooltipPosition="below" matTooltipTouchGestures="on" #playerTooltip="matTooltip" (click)="playerTooltip.show()" (blur)="playerTooltip.hide()" (keydown.escape)="playerTooltip.hide()" [attr.aria-label]="playerCount() + '. Show player names'">{{ playerCount() }}</button></div></div>
         <button class="address" (click)="copyAddress()" matTooltip="Copy server address"><code>{{ current.server.address || 'mc.aron.best' }}</code><app-icon name="copy"/></button>
-        <div class="server-buttons">@if (serverRunning()) { <button mat-flat-button (click)="act('restart')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()">Restart</button> } @else { <button mat-flat-button (click)="act('start')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()"><app-icon matButtonIcon name="play"/>Start</button> }<button mat-stroked-button (click)="act('stop')" [disabled]="!serverReady() || !!busy() || !serverRunning() || serverTransitioning() || !!connectionError()">Stop</button><button mat-button (click)="act('backup')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()">Back up</button></div>
+        <div class="server-buttons">@if (serverRunning()) { <button mat-flat-button (click)="act('restart')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()">Restart</button> } @else { <button mat-flat-button (click)="act('start')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()"><app-icon matButtonIcon name="play"/>Start</button> }<button mat-stroked-button (click)="act('stop')" [disabled]="!serverReady() || !!busy() || !serverRunning() || serverTransitioning() || !!connectionError()">Stop</button><button mat-button (click)="backUp()" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()">Back up</button></div>
       </section>
       @if (current.server.failure; as failure) { <div class="notice error"><div><strong>{{ failure.message }}</strong>@if (current.server.crashLog?.length) { <button mat-button (click)="showCrashLog.set(!showCrashLog())">{{ showCrashLog() ? 'Hide crash log' : 'Show crash log' }}</button>@if (showCrashLog()) { <pre>{{ current.server.crashLog!.join('\n') }}</pre> } }</div></div> }
       <mat-tab-group class="workspace-tabs" [selectedIndex]="tab()" (selectedIndexChange)="tab.set($event)" animationDuration="180ms" preserveContent>
         <mat-tab label="Basic">
           <section class="mods-panel">
-            <div class="section-heading"><div><h2>Server mods <span class="count">{{ serverMods().length }}</span></h2><p>{{ enabledCount() }} enabled · Changes apply when the server starts.</p></div><button mat-flat-button (click)="openAddMod(addModDialog)" [disabled]="!writable() || !!busy() || !!connectionError()"><app-icon matButtonIcon name="plus"/>Add mod</button></div>
+            <div class="section-heading"><div><h2>Server mods <span class="count">{{ serverMods().length }}</span></h2><p>{{ enabledCount() }} enabled · New mods load on the next start or restart.</p></div><button mat-flat-button (click)="openAddMod(addModDialog)" [disabled]="!canAddMods() || !!busy() || !!connectionError()"><app-icon matButtonIcon name="plus"/>Add mod</button></div>
             @if (!writable()) { <p class="write-hint"><app-icon name="shield"/>{{ writeHint() }}</p> }
             @if (modsError()) { <div class="notice error" role="alert">{{ modsError() }}<button mat-button (click)="loadServerMods()">Retry</button></div> }
             <mat-form-field appearance="outline" class="search" subscriptSizing="dynamic"><mat-label>Search mods</mat-label><app-icon matPrefix name="search"/><input matInput [formControl]="search" autocomplete="off" maxlength="100"/>@if (search.value) { <button mat-icon-button matSuffix (click)="search.setValue('')" aria-label="Clear search"><app-icon name="close"/></button> }</mat-form-field>
@@ -54,7 +53,7 @@
           <section class="logs-panel" aria-labelledby="logs-title"><div class="section-heading"><div class="log-title"><app-icon name="terminal"/><h2 id="logs-title">{{ activeProfile()?.name || 'Server' }} log</h2><span>Active server · Refreshes every 15s</span></div><button mat-icon-button (click)="loadLogs()" [disabled]="!authorized() || logsLoading() || !!connectionError()" aria-label="Refresh logs"><app-icon name="refresh"/></button></div>@if (logsError()) { <p class="error-text" role="alert">{{ logsError() }}</p> }<pre tabindex="0" aria-label="Minecraft server log output">{{ logs().length ? logs().join('\n') : logsLoading() ? 'Loading output...' : 'No server output yet.' }}</pre></section>
         </mat-tab>
       </mat-tab-group>
-      <footer><span>Last backup: {{ lastBackup() ? (lastBackup() | date:'MMM d, h:mm a') : 'None yet' }}</span><span>Aron.best</span></footer>
+      <footer><div class="server-timestamps"><span>{{ workspaceProfile()?.name || 'Selected server' }} · Last updated: {{ lastUpdated() }}</span><span>Active server · Last backup: {{ lastBackup() ? (lastBackup() | date:'MMM d, h:mm a') : 'None yet' }}</span></div><span>Aron.best</span></footer>
     }
   </main>
 </div>
@@ -86,7 +85,7 @@
 <ng-template #addModDialog>
   <h2 mat-dialog-title>Add mod</h2>
   <mat-dialog-content class="add-mod-content">
-    <p>Choose the mod's .jar file. It will be added directly to this saved server.</p>
+    <p>Choose the mod's .jar file. You can add new mods while this server runs. They will load on its next start or restart.</p>
     <p class="compatibility">Use mods for Minecraft {{ status()?.pack?.minecraftVersion }} and {{ status()?.pack?.loader }}.</p>
     <input #modUpload type="file" accept=".jar" multiple hidden (change)="chooseMods($event)"/>
     <button class="choose-mods" mat-stroked-button (click)="modUpload.click()" [disabled]="!!busy()"><app-icon matButtonIcon name="plus"/>{{ selectedMods().length ? 'Choose different files' : 'Choose .jar files' }}</button>
@@ -98,5 +97,5 @@
     @if (addModError()) { <p class="add-error" role="alert">{{ addModError() }}</p> }
     @if (busy() === 'install') { <p class="add-progress" role="status"><mat-spinner diameter="18"/>Adding mod files... {{ uploadProgress() }}%</p> }
   </mat-dialog-content>
-  <mat-dialog-actions align="end"><button mat-button mat-dialog-close [disabled]="!!busy()">Cancel</button><button mat-flat-button (click)="addMods()" [disabled]="!selectedMods().length || !writable() || !!busy()">{{ selectedMods().length > 1 ? 'Add mods' : 'Add mod' }}</button></mat-dialog-actions>
+  <mat-dialog-actions align="end"><button mat-button mat-dialog-close [disabled]="!!busy()">Cancel</button><button mat-flat-button (click)="addMods()" [disabled]="!selectedMods().length || !canAddMods() || !!busy()">{{ selectedMods().length > 1 ? 'Add mods' : 'Add mod' }}</button></mat-dialog-actions>
 </ng-template>

@@ -16,6 +16,7 @@ import { AdvancedWorkshopComponent } from './advanced-workshop.component';
 import { IconComponent } from './icon.component';
 import { ConfirmDialogComponent, ConfirmDialogData } from './confirm-dialog.component';
 import { ServerProfileDialogComponent, ServerProfileDialogData } from './server-profile-dialog.component';
+import { ServerBackupDialogComponent, ServerBackupDialogData } from './server-backup-dialog.component';
 import { ModAction, SavedServer, ServerAction, ServerTarget, WorkspaceMod, WorkshopApi, WorkshopStatus, downloadBlob, errorMessage, fileSize } from './workshop-api.service';
 
 type LoaderChoice = Pick<ServerTarget, 'loader' | 'loaderVersion'>;
@@ -97,6 +98,7 @@ export class WorkshopComponent {
     return this.serverTransitioning() ? 'Server operation in progress...' : '';
   });
   readonly writable = computed(() => this.authorized() && this.status()?.capabilities.workspaceWrite === true && ['stopped', 'not-installed', 'failed'].includes(this.workspaceServer()?.state ?? '') && !this.workspaceTransitioning());
+  readonly canAddMods = computed(() => this.authorized() && this.status()?.capabilities.workspaceWrite === true && !this.workspaceTransitioning() && ['running', 'online', 'stopped', 'not-installed', 'failed'].includes(this.workspaceServer()?.state ?? ''));
   readonly currentInstallation = computed<ServerTarget>(() => ({
     minecraftVersion: this.status()?.pack.minecraftVersion ?? '',
     loader: (this.status()?.pack.loader ?? 'Fabric') as ServerTarget['loader'],
@@ -107,10 +109,10 @@ export class WorkshopComponent {
   readonly installationValid = computed(() => this.optionsVersion() === this.installation().minecraftVersion && this.loaderChoices().some(choice => choice.loader === this.installation().loader && choice.loaderVersion === this.installation().loaderVersion));
   readonly writeHint = computed(() => !this.status()?.capabilities.workspaceWrite
     ? 'File changes are available when the isolated server is configured.'
-    : this.workspaceTransitioning() ? 'Wait for this saved server to finish its current operation.' : 'Stop this server before changing its mods or files, or select another saved server to edit.');
-  readonly downloadReady = computed(() => this.authorized() && (!this.status()?.capabilities.workspaceWrite || this.writable()));
+    : this.workspaceTransitioning() ? 'Wait for this saved server to finish its current operation.' : 'You can add and download mods while this server runs. Stop it to replace, disable or uninstall mods, or edit its other files.');
+  readonly downloadReady = computed(() => this.authorized() && !this.workspaceTransitioning());
   readonly downloadHint = computed(() => this.status()?.capabilities.workspaceWrite
-    ? this.writable() ? 'Selected server mods and configuration' : 'Stop this server to download a snapshot'
+    ? 'Selected server mods and configuration'
     : 'Download the modpack to play');
   readonly lastBackup = computed(() => {
     const value = this.status()?.server.lastBackup;
@@ -118,6 +120,28 @@ export class WorkshopComponent {
     const stamp = value.match(/^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2}\.\d{3}Z)/);
     const normalized = stamp ? `${stamp[1]}:${stamp[2]}:${stamp[3]}` : value;
     return Number.isNaN(Date.parse(normalized)) ? null : normalized;
+  });
+  readonly playerCount = computed(() => {
+    const players = this.status()?.server.players;
+    if (!this.serverRunning()) return '0 players';
+    if (players?.online == null) return 'Players unavailable';
+    return players.max == null ? `${players.online} ${players.online === 1 ? 'player' : 'players'}` : `${players.online} / ${players.max} players`;
+  });
+  readonly playerNames = computed(() => {
+    const players = this.status()?.server.players;
+    if (!this.serverRunning() || players?.online === 0) return 'No players online';
+    if (players?.online == null || !players.names?.length) return 'Player names unavailable';
+    const names = players.names.slice(0, players.online);
+    const missing = players.online - names.length;
+    return [...names, ...(missing > 0 ? [`+ ${missing} more (names unavailable)`] : [])].join('\n');
+  });
+  readonly lastUpdated = computed(() => {
+    const updatedAt = this.status()?.workspace?.updatedAt;
+    if (!updatedAt || Number.isNaN(Date.parse(updatedAt))) return 'No changes recorded';
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Chicago', month: 'short', day: 'numeric', year: 'numeric',
+      hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+    }).format(new Date(updatedAt));
   });
   readonly uptime = computed(() => {
     const seconds = this.status()?.server.uptimeSeconds;
@@ -328,7 +352,7 @@ export class WorkshopComponent {
   }
 
   openAddMod(template: TemplateRef<unknown>): void {
-    if (!this.writable() || this.busy()) return;
+    if (!this.canAddMods() || this.busy()) return;
     this.selectedMods.set([]);
     this.addModError.set('');
     this.uploadProgress.set(0);
@@ -356,7 +380,7 @@ export class WorkshopComponent {
 
   async addMods(): Promise<void> {
     const files = this.selectedMods();
-    if (!files.length || !this.writable() || this.busy()) return;
+    if (!files.length || !this.canAddMods() || this.busy()) return;
     let installed = 0;
     const profileId = this.workspaceId();
     if (this.addModDialog) this.addModDialog.disableClose = true;
@@ -367,7 +391,7 @@ export class WorkshopComponent {
         await this.api.uploadWorkspaceFile(file, `mods/${file.name}`, false, value => this.uploadProgress.set(value), profileId);
         installed++;
       }
-    }, `${files.length === 1 ? 'Mod' : 'Mods'} added. Start the server to load them.`);
+    }, `${files.length === 1 ? 'Mod' : 'Mods'} added. They will load the next time this server starts or restarts.`);
     if (this.addModDialog) this.addModDialog.disableClose = false;
     if (added) this.addModDialog?.close();
     else this.selectedMods.set(files.slice(installed));
@@ -384,6 +408,23 @@ export class WorkshopComponent {
     if (prompt && !await this.confirm(prompt)) return;
     if (profileId !== this.activeProfile()?.id) return;
     await this.perform(`server:${action}`, () => this.api.serverAction(action), `Server ${action} requested.`);
+  }
+
+  async backUp(): Promise<void> {
+    const profile = this.activeProfile();
+    if (!profile || !this.serverReady() || this.busy() || this.serverTransitioning() || this.connectionError()) return;
+    await firstValueFrom(this.dialog.open<ServerBackupDialogComponent, ServerBackupDialogData, boolean>(ServerBackupDialogComponent, {
+      width: '500px', maxWidth: 'calc(100vw - 32px)',
+      data: {
+        name: profile.name,
+        profileId: profile.id,
+        create: () => {
+          if (profile.id !== this.activeProfile()?.id || !this.serverReady() || this.busy() || this.serverTransitioning() || this.connectionError()) throw new Error('The active server changed or is busy. Close this dialog and try again.');
+          return this.api.createServerBackup(profile.id);
+        },
+      },
+    }).afterClosed());
+    if (!this.destroyRef.destroyed) await this.refresh(false);
   }
 
   async downloadPack(): Promise<void> {

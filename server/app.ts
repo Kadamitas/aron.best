@@ -145,12 +145,12 @@ export async function createApp(configuration = readConfiguration(), dependencie
     packMutationRunning = true;
     try { return await operation(); } finally { packMutationRunning = false; }
   }
-  async function assertWorkspaceWritable() {
+  async function assertWorkspaceWritable(allowNewMod = false) {
     const controller = await remote?.refresh();
     if (!controller?.isolated) throw Object.assign(new Error('File changes require the isolated Minecraft container.'), { statusCode: 409 });
     const selected = controller.workspace;
     const activeJob = jobRunning && selected.profileId === controller.profiles.activeId;
-    if (activeJob || packMutationRunning || selected.server.busy || !['stopped', 'not-installed', 'failed'].includes(selected.server.state)) {
+    if (activeJob || packMutationRunning || selected.server.busy || !['stopped', 'not-installed', 'failed', ...(allowNewMod ? ['running'] : [])].includes(selected.server.state)) {
       throw Object.assign(new Error('Stop the server being edited and wait for its current operation before changing workspace files.'), { statusCode: 409 });
     }
   }
@@ -295,18 +295,18 @@ export async function createApp(configuration = readConfiguration(), dependencie
     return file;
   });
   app.post('/api/workspace/uploads', { config: { rateLimit: { max: 20, timeWindow: '5 minutes' } } }, async request => {
-    await assertWorkspaceWritable();
+    await assertWorkspaceWritable(true);
     const body = z.object({ path: z.string().trim().min(1).max(320), size: z.number().int().positive().max(128 * 1024 * 1024), replace: z.boolean().default(false) }).strict().parse(request.body);
     return workspace.beginUpload(body.path, body.size, body.replace, request.ip);
   });
   app.post('/api/workspace/uploads/:id/chunks', { bodyLimit: 800_000, config: { rateLimit: { max: 400, timeWindow: '5 minutes' } } }, async request => {
-    await assertWorkspaceWritable();
+    await assertWorkspaceWritable(true);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({ index: z.number().int().nonnegative(), data: z.string().min(1).max(750_000) }).strict().parse(request.body);
     return workspace.appendUpload(id, body.index, body.data, request.ip);
   });
   app.post('/api/workspace/uploads/:id/complete', { config: { rateLimit: { max: 20, timeWindow: '5 minutes' } } }, async request => {
-    await assertWorkspaceWritable();
+    await assertWorkspaceWritable(true);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     z.object({}).strict().parse(request.body);
     const file = await workspace.finishUpload(id, request.ip);
@@ -351,6 +351,29 @@ export async function createApp(configuration = readConfiguration(), dependencie
     return reply.code(202).send(await remote!.install(target));
   });
   app.get('/api/server/logs', async () => ({ lines: await minecraft.logs() }));
+  app.post('/api/server/backups', { config: { rateLimit: { max: 4, timeWindow: '10 minutes' } } }, async (request, reply) => {
+    z.object({}).strict().parse(request.body);
+    if (!remote) throw Object.assign(new Error('Backup downloads require the isolated Minecraft container.'), { statusCode: 409 });
+    if (jobRunning || packMutationRunning) throw Object.assign(new Error('Wait for the current server operation before creating a backup.'), { statusCode: 409 });
+    return reply.code(202).send(await remote.createBackup());
+  });
+  app.get('/api/server/backups/:id', { config: { rateLimit: { max: 40, timeWindow: '1 minute' } } }, async request => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    if (!remote) throw Object.assign(new Error('Backup downloads require the isolated Minecraft container.'), { statusCode: 409 });
+    return remote.backup(id);
+  });
+  app.get('/api/server/backups/:id/download', { config: { rateLimit: { max: 6, timeWindow: '10 minutes' } } }, async (request, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    if (!remote) throw Object.assign(new Error('Backup downloads require the isolated Minecraft container.'), { statusCode: 409 });
+    const job = await remote.backup(id);
+    if (job.state !== 'ready' || !job.filename) throw Object.assign(new Error(job.error ?? 'This backup is still being prepared.'), { statusCode: 409 });
+    const archive = await remote.downloadBackup(id);
+    reply.raw.once('close', () => archive.stream.destroy());
+    return reply.type('application/gzip')
+      .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(job.filename)}`)
+      .header('Content-Length', archive.size)
+      .send(archive.stream);
+  });
   app.post('/api/server/action', { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } }, async (request, reply) => {
     const { action } = z.object({ action: z.enum(['start', 'stop', 'restart', 'backup', 'update', 'sync-profile']) }).strict().parse(request.body);
     await remote?.assertProfile();

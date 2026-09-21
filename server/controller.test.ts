@@ -65,7 +65,7 @@ test('controller serializes lifecycle and file changes and preserves stale edits
     assert.equal((await setup.app.inject({ method: 'POST', url: '/workspace/archive', headers: authorization, payload: { manifest: { ...archiveManifest, minecraft: { ...archiveManifest.minecraft, version: '1.0' } } } })).statusCode, 409);
     const upload = (await setup.app.inject({ method: 'POST', url: '/workspace/uploads', headers: authorization, payload: { path: 'config/cancel-me.txt', size: 1, replace: false, address: 'test-client' } })).json();
     assert.equal((await setup.app.inject({ method: 'POST', url: '/action', headers: authorization, payload: { action: 'start' } })).statusCode, 200);
-    assert.equal((await setup.app.inject({ method: 'POST', url: '/workspace/archive', headers: authorization, payload: { manifest: archiveManifest } })).statusCode, 409);
+    assert.equal((await setup.app.inject({ method: 'POST', url: '/workspace/archive', headers: authorization, payload: { manifest: archiveManifest } })).statusCode, 200);
     assert.equal((await setup.app.inject({ method: 'DELETE', url: `/workspace/uploads/${upload.id}`, headers: authorization, payload: { address: 'test-client' } })).statusCode, 200);
     const mutation = await setup.app.inject({ method: 'POST', url: '/workspace/mods/action', headers: authorization, payload: { path: 'mods/example.jar', action: 'disable' } });
     assert.equal(mutation.statusCode, 409);

@@ -5,13 +5,14 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { copyVerifiedFile, downloadArtifact } from './download.js';
 import { readInstalled, type InstalledServer } from './loader-installation.js';
+import { PlayerCountMonitor } from './player-count.js';
 
 /** A mod to stage: either a CurseForge CDN download or a verified copy from the host's CurseForge App profile. */
 export interface ModDownload { modId: number; fileId: number; fileName: string; url?: string; localPath?: string; hashes: { algo: number; value: string }[]; fileLength: number }
 export type MaintenanceAction = 'start' | 'stop' | 'restart' | 'backup' | 'update' | 'sync-profile';
 const describeAction = (action: MaintenanceAction) => action === 'sync-profile' ? 'App pack sync' : `Server ${action}`;
 type ServerState = 'not-installed' | 'stopped' | 'starting' | 'running' | 'stopping' | 'updating' | 'failed';
-const backupItems = ['world', 'mods', 'config', 'server.properties', 'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json', 'installed-mods.json'];
+const backupItems = ['world', 'mods', 'config', 'defaultconfigs', 'kubejs', 'scripts', 'datapacks', 'resourcepacks', 'shaderpacks', 'server.properties', 'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json', 'installed-mods.json', 'installation.json', 'eula.txt'];
 const maximumBackups = 20;
 const reservedDiskBytes = 256n * 1024n ** 2n;
 export interface MinecraftDependencies {
@@ -36,7 +37,10 @@ async function exists(file: string): Promise<boolean> {
 async function inspectSnapshot(source: string): Promise<bigint> {
   const metadata = await lstat(source, { bigint: true });
   if (metadata.isSymbolicLink()) throw new Error(`Backups do not follow symbolic links: ${path.basename(source)}.`);
-  if (metadata.isFile()) return metadata.size;
+  if (metadata.isFile()) {
+    if (metadata.nlink !== 1n) throw new Error('Backups do not include files with additional hard links.');
+    return metadata.size;
+  }
   if (!metadata.isDirectory()) throw new Error(`Backups require regular files or directories: ${path.basename(source)}.`);
   let bytes = 0n;
   for (const entry of await readdir(source)) bytes += await inspectSnapshot(path.join(source, entry));
@@ -50,13 +54,15 @@ async function copySnapshot(source: string, destination: string) {
     errorOnExist: true,
     force: false,
     filter: async current => {
-      if ((await lstat(current)).isSymbolicLink()) throw new Error('A symbolic link appeared while copying the backup.');
+      const info = await lstat(current);
+      if (info.isSymbolicLink() || info.isFile() && info.nlink !== 1 || !info.isDirectory() && !info.isFile()) throw new Error('A linked or unsupported file appeared while copying the backup.');
       return true;
     },
   });
 }
 
 export class MinecraftServer {
+  private readonly playerCounts = new PlayerCountMonitor();
   private installed?: InstalledServer;
   private process?: ChildProcessWithoutNullStreams;
   private state: ServerState = 'not-installed';
@@ -88,7 +94,7 @@ export class MinecraftServer {
       this.lastBackup = Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString() : null;
     }
   }
-  status() { return { state: this.state, version: this.installed?.minecraftVersion ?? this.options.version, loader: this.installed?.loader ?? 'Fabric', loaderVersion: this.installed?.loaderVersion ?? this.options.loaderVersion ?? '0.19.5', address: this.options.address, uptimeSeconds: this.startedAt ? Math.floor((Date.now() - this.startedAt) / 1000) : 0, lastBackup: this.lastBackup, busy: this.busy, failure: this.failure }; }
+  status() { return { state: this.state, version: this.installed?.minecraftVersion ?? this.options.version, loader: this.installed?.loader ?? 'Fabric', loaderVersion: this.installed?.loaderVersion ?? this.options.loaderVersion ?? '0.19.5', address: this.options.address, uptimeSeconds: this.startedAt ? Math.floor((Date.now() - this.startedAt) / 1000) : 0, lastBackup: this.lastBackup, busy: this.busy, failure: this.failure, players: this.playerCounts.read(this.state === 'running', this.installed?.minecraftVersion ?? this.options.version) }; }
   logs() { return [...this.lines]; }
   appendLog(line: string) { this.log(line); }
   private recordFailure(message: string, exitCode: number | null = null) { this.failure = { at: new Date().toISOString(), message, exitCode }; }
@@ -115,6 +121,7 @@ export class MinecraftServer {
     if (this.busy) throw Object.assign(new Error('A server operation is already running.'), { statusCode: 409 });
     if (action === 'restart' && Date.now() - this.lastRestartAt < 120_000) throw Object.assign(new Error('Wait two minutes between restarts.'), { statusCode: 429 });
     this.busy = true;
+    let snapshot: string | undefined;
     try {
       if (action === 'start') await this.start();
       if (action === 'stop') await this.stop();
@@ -122,7 +129,7 @@ export class MinecraftServer {
       if (action === 'backup') {
         const running = Boolean(this.process);
         await this.stop();
-        try { await this.backup(); } catch (error) {
+        try { snapshot = await this.backup(); } catch (error) {
           await this.resumeAfterFailure(running, error);
           throw error;
         }
@@ -130,6 +137,7 @@ export class MinecraftServer {
       }
       if (action === 'update' || action === 'sync-profile') { if (!downloads) throw new Error('The update source is not configured.'); await this.update(await downloads()); }
       this.options.activity(`${describeAction(action)} completed.`);
+      return snapshot;
     } catch (error) {
       this.options.activity(`${describeAction(action)} failed: ${error instanceof Error ? error.message : 'Unknown failure'}`);
       throw error;

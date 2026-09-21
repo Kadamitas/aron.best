@@ -2,13 +2,23 @@
 
 Dictionary Minecraft Server has Basic, Advanced, and Server Log tabs with one invitation and session. There is no separate Advanced login, repeated access banner, or user-facing pack release number. No tab exposes a shell or arbitrary host commands.
 
+The active server shows its player count. Hover, focus, or tap that count to see player names, one per line. Player information comes from the private Minecraft status listener and is cached briefly. If the server hides names or returns only a sample, the interface says which names are unavailable instead of inventing a complete list.
+
+Last updated belongs to the server currently selected for editing. Successful mod and file changes update a persisted timestamp; page refreshes and backups do not. Dates use `America/Chicago`, including the correct CST or CDT offset throughout the year.
+
 ## Basic
 
 Search the actual server mod files, choose Add mod to install JAR files, enable or disable them, and uninstall them. Add mod installs the uploaded files immediately; it does not submit a request for someone else to approve. Disabled mods remain visible. Uninstall moves the file into hidden recovery storage rather than permanently deleting it. New mod files are executable code and must come from people you trust.
 
-Stop the server being edited before changing its files. An inactive saved server can be edited while the active server keeps running. Controls lock during conflicting maintenance. A failed startup also permits file repair. Server controls stay above the tabs and always control the active server, while its output lives in Server Log.
+New mod JARs can be added while the selected server runs. Uploads finish atomically without replacing an existing file; the server loads the added mods on its next restart. Replacing, disabling, uninstalling, or editing existing files still requires stopping that server. An inactive saved server can be edited while the active server keeps running. Controls lock during conflicting maintenance. A failed startup also permits file repair. Server controls stay above the tabs and always control the active server, while its output lives in Server Log.
 
 Basic has no CurseForge request, publishing, or imported-profile sections. File upload and local mod controls do not require a catalog key. Docker does not mount the host CurseForge App folder.
+
+## Backups
+
+Back up opens a confirmation with the option to download the completed `.tar.gz` backup to the user's computer. A copy is retained on the server either way. The operation targets the active server, independently of which saved server is open for editing.
+
+For a consistent world snapshot, a running server stops safely, saves its backup, and starts again. The interface shows progress and an explicit failure if preparation fails. Downloads refer to the completed backup job, not a later active server or a changing world directory. Downloads use the same invitation access as the rest of the workspace. Treat a full backup as private server data, not a modpack for players.
 
 ## Saved servers
 
@@ -44,11 +54,22 @@ Limits are 128 MiB per uploaded file, 256 KiB per text file, 4 GiB for the edita
 
 ## Downloadable pack
 
-With the isolated controller, Download pack ZIP exports the editing slot's enabled mods and configuration under `overrides/`, with a CurseForge-compatible manifest. Disabled mods, recovery files, and private world/server state are excluded. The slot being exported must be stopped so the archive is consistent; another active slot may keep running. Archives are limited to 128 MiB; larger packs require another export strategy. This download does not publish a CurseForge release and does not add client-only mods absent from the server.
+With the isolated controller, Download pack ZIP exports the editing slot's enabled mods and configuration under `overrides/`, with a CurseForge-compatible manifest. Disabled mods, recovery files, and private world/server state are excluded. It works while the server runs. If a mod or configuration file changes during export, the download fails with a retry message instead of returning a mixed snapshot. Archives are limited to 128 MiB; larger packs require another export strategy. This download does not publish a CurseForge release and does not add client-only mods absent from the server. Newly uploaded mods are included even before the next restart.
 
 Without the isolated controller, the legacy download contains the imported profile manifest rather than the server workspace. File writes are unavailable outside the isolated controller.
 
 ## Repeatable validation
+
+The fixture-based browser checks use temporary ports and do not contact a live server:
+
+```sh
+npm run build
+node scripts/saved-servers-ui-smoke.mjs dist/aron-best/browser
+node scripts/live-workshop-ui-smoke.mjs dist/aron-best/browser
+node scripts/version-selector-ui-smoke.mjs dist/aron-best/browser
+```
+
+Run `npm test` on Linux to include the anchored-filesystem backup archive checks. Those Linux-specific cases are skipped on macOS. The tests use temporary fixture worlds, never production volumes.
 
 Start the separate Docker preview described in `docs/docker.md`, leaving its Minecraft process stopped:
 

@@ -3,11 +3,12 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { MinecraftServer, MaintenanceAction, ModDownload } from './minecraft.js';
 import type { ModpackFiles, ModpackFile, ModpackText } from './modpack-files.js';
 import type { ServerProfiles } from './server-profiles.js';
+import type { BackupJob } from './backup-archive.js';
 
 type ServerStatus = ReturnType<MinecraftServer['status']>;
 export interface ControllerSnapshot {
   server: ServerStatus & { installationError?: string; profileError?: string };
-  workspace: { profileId: string; server: ServerStatus & { installationError?: string } };
+  workspace: { profileId: string; server: ServerStatus & { installationError?: string }; updatedAt: string | null };
   profiles: Awaited<ReturnType<ServerProfiles['list']>>;
   profileBindingRequired: boolean;
   isolated: boolean;
@@ -55,6 +56,18 @@ export class ControllerClient {
   async versions(minecraftVersion?: string): Promise<unknown> { return this.json(`/versions${minecraftVersion ? `?${new URLSearchParams({ minecraftVersion })}` : ''}`); }
   async install(target: unknown): Promise<{ accepted: boolean }> { const result = await this.json<{ accepted: boolean }>('/installation', 'POST', target); await this.refresh(); return result; }
   async profile(action: 'create' | 'select' | 'rename' | 'remove', body: unknown): Promise<unknown> { return this.json(action === 'create' ? '/profiles' : `/profiles/${action}`, 'POST', body); }
+  async createBackup(): Promise<Pick<BackupJob, 'id' | 'profileId'>> { return this.json('/backups', 'POST', {}); }
+  async backup(id: string): Promise<BackupJob> { return this.json(`/backups/${id}`); }
+  async downloadBackup(id: string) {
+    const response = await this.request(`/backups/${id}/download`, 'GET', undefined, 30 * 60_000);
+    if (!response.body) throw new Error('Controller returned an empty backup download.');
+    const size = Number(response.headers.get('content-length'));
+    if (!Number.isSafeInteger(size) || size < 1) {
+      await response.body.cancel();
+      throw new Error('Controller returned an invalid backup download.');
+    }
+    return { stream: Readable.fromWeb(response.body as never), size };
+  }
   async action(action: MaintenanceAction, resolveDownloads?: () => Promise<ModDownload[]>): Promise<void> {
     const downloads = action === 'update' || action === 'sync-profile' ? await resolveDownloads?.() : undefined;
     if (downloads?.some(file => file.localPath)) throw Object.assign(new Error('Local profile sync is unavailable across container boundaries. Upload the files in the workspace.'), { statusCode: 409 });

@@ -1,6 +1,6 @@
 import { HttpClient, HttpErrorResponse, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, timeout } from 'rxjs';
 
 export interface Mod {
   id: number;
@@ -37,8 +37,9 @@ export interface WorkshopStatus {
     crashLog?: string[];
     installationError?: string;
     profileError?: string;
+    players?: { online: number | null; max: number | null; names: string[] | null };
   };
-  workspace?: { profileId: string; server: WorkshopStatus['server'] };
+  workspace?: { profileId: string; server: WorkshopStatus['server']; updatedAt?: string | null };
   pack: {
     name: string;
     minecraftVersion: string;
@@ -89,6 +90,14 @@ export interface WorkspaceMod extends WorkspaceFile {
 export type ModAction = 'enable' | 'disable' | 'uninstall';
 
 export type ServerAction = 'start' | 'stop' | 'restart' | 'backup' | 'update' | 'sync-profile';
+
+export interface ServerBackup {
+  id: string;
+  profileId: string;
+  state: 'running' | 'ready' | 'failed';
+  filename?: string;
+  error?: string;
+}
 
 export interface ServerTarget {
   minecraftVersion: string;
@@ -181,6 +190,22 @@ export class WorkshopApi {
 
   serverAction(action: ServerAction): Promise<unknown> {
     return firstValueFrom(this.http.post('/api/server/action', { action }, { headers: this.headers }));
+  }
+
+  createServerBackup(profileId: string): Promise<Pick<ServerBackup, 'id' | 'profileId'>> {
+    return firstValueFrom(this.http.post<Pick<ServerBackup, 'id' | 'profileId'>>('/api/server/backups', {}, {
+      headers: this.headers.set('X-Server-Profile', profileId),
+    }).pipe(timeout(30_000)));
+  }
+
+  serverBackup(id: string): Promise<ServerBackup> {
+    return firstValueFrom(this.http.get<ServerBackup>(`/api/server/backups/${encodeURIComponent(id)}`, {
+      headers: this.headers,
+    }).pipe(timeout(30_000)));
+  }
+
+  serverBackupDownloadUrl(id: string): string {
+    return `/api/server/backups/${encodeURIComponent(id)}/download`;
   }
 
   serverVersions(minecraftVersion?: string): Promise<ServerVersions> {
