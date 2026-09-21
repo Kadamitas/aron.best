@@ -63,10 +63,24 @@ function executable(name) {
     if (!isAbsolute(candidate)) continue;
     try {
       accessSync(candidate, constants.X_OK);
-      return realpathSync(candidate);
+      return stableExecutablePath(realpathSync(candidate));
     } catch { /* Try the next executable directory. */ }
   }
   throw new Error(`Cannot find ${name}. Install it or provide --${name} with an absolute executable path.`);
+}
+
+// A Homebrew upgrade deletes the old Cellar version directory, which would leave
+// launchd pointing at a binary that no longer exists. Homebrew keeps a per-formula
+// "opt" link that always resolves to the installed version, so prefer that path
+// whenever it exists and currently resolves to the same file.
+function stableExecutablePath(resolvedPath) {
+  const cellar = resolvedPath.match(/^(\/opt\/homebrew|\/usr\/local)\/Cellar\/([^/]+)\/[^/]+\/(.+)$/);
+  if (!cellar) return resolvedPath;
+  const optPath = `${cellar[1]}/opt/${cellar[2]}/${cellar[3]}`;
+  try {
+    if (realpathSync(optPath) === resolvedPath) return optPath;
+  } catch { /* No opt link for this formula; keep the resolved path. */ }
+  return resolvedPath;
 }
 
 const binaries = Object.fromEntries(['node', 'nginx', 'caddy'].map((name) => [name, executable(name)]));
