@@ -4,6 +4,8 @@ import { constants, type Stats } from 'node:fs';
 import { access, lstat, mkdir, open, readdir, realpath, rename, rm, statfs, utimes, writeFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
+import { classifyRuntimePath } from './runtime-integrity.js';
+import { javaProxyArguments } from './java-network.js';
 
 const curatedVersions = ['1.6.4', '1.7.10', '1.12.2', '1.16.5', '1.18.2', '1.19.2', '1.20.1', '1.21.1'];
 const versionSchema = z.string().regex(/^[0-9][A-Za-z0-9.+-]{0,79}$/);
@@ -28,6 +30,10 @@ export interface LoaderInstallationDependencies {
   availableBytes: (directory: string) => Promise<bigint>;
   rename: typeof rename;
 }
+export interface InstallationHardening {
+  prepare(directory: string, installed: InstalledServer, vanilla: { sha1: string; size: number }): Promise<void>;
+  seal(): Promise<unknown>;
+}
 interface MinecraftRelease { id: string; type: string; url: string; sha1: string }
 interface TreeItem { relative: string; directory: boolean; info: Stats }
 interface Directory { handle: FileHandle; anchored: string }
@@ -38,7 +44,7 @@ export class LoaderInstallationError extends Error {
 
 function missing(error: unknown): boolean { return (error as NodeJS.ErrnoException).code === 'ENOENT'; }
 function sameFile(left: Stats, right: Stats): boolean { return left.dev === right.dev && left.ino === right.ino; }
-function runtime(name: string): boolean { return runtimeNames.has(name) || /^(?:minecraft_server[.-].*|forge-.*|neoforge-.*|fabric-installer.*|quilt-installer.*)\.jar(?:\.log)?$/.test(name); }
+function runtime(name: string): boolean { return classifyRuntimePath(name) === 'protected' || runtimeNames.has(name) || /^(?:minecraft_server[.-].*|forge-.*|neoforge-.*|fabric-installer.*|quilt-installer.*)\.jar(?:\.log)?$/.test(name); }
 function newest(versions: string[]): string | undefined { return [...versions].sort((left, right) => right.localeCompare(left, 'en', { numeric: true })).at(0); }
 function xmlVersions(contents: string): string[] { return [...contents.matchAll(/<version>([^<]+)<\/version>/g)].map(match => match[1]!).filter(value => versionSchema.safeParse(value).success); }
 function officialUrl(value: string): URL {
@@ -123,10 +129,10 @@ export class LoaderInstallation {
   private readonly cache = new Map<string, { expires: number; bytes: Buffer }>();
   private installing = false;
 
-  constructor(private readonly options: { directory: string; javaPaths: Record<number, string>; log: (line: string) => void }, dependencies: Partial<LoaderInstallationDependencies> = {}) {
+  constructor(private readonly options: { directory: string; javaPaths: Record<number, string>; log: (line: string) => void; hardening?: InstallationHardening; installerProxyAddress?: string }, dependencies: Partial<LoaderInstallationDependencies> = {}) {
     this.directory = path.resolve(options.directory);
     if (this.directory === path.parse(this.directory).root) throw new LoaderInstallationError('Use a dedicated Minecraft server directory.');
-    this.dependencies = { fetch, run: runInstaller, rename, availableBytes: async directory => { const info = await statfs(directory, { bigint: true }); return info.bavail * info.bsize; }, ...dependencies };
+    this.dependencies = { fetch, run: (java, args, directory, log) => runInstaller(java, [...(options.installerProxyAddress ? javaProxyArguments(options.installerProxyAddress, 3128) : []), ...args], directory, log), rename, availableBytes: async directory => { const info = await statfs(directory, { bigint: true }); return info.bavail * info.bsize; }, ...dependencies };
   }
 
   async catalog(minecraftVersion?: string): Promise<InstallationCatalog> {
@@ -184,10 +190,11 @@ export class LoaderInstallation {
     try {
       this.options.log(`Installing Minecraft ${target.minecraftVersion} with ${target.loader} ${target.loaderVersion}.`);
       const launchArgs = await this.prepare(staging, target, javaMajor, details.downloads.server);
-      await this.inventory(staging);
-      for (const entry of preserved) await this.copyEntry(original, staging, entry);
       const installed = installedSchema.parse({ ...target, javaMajor, launchArgs, installedAt: new Date().toISOString() });
       if (!safeLaunch(installed)) throw new LoaderInstallationError('The installer did not produce a supported launch command.', 502);
+      await this.options.hardening?.prepare(staging, installed, details.downloads.server);
+      await this.inventory(staging);
+      for (const entry of preserved) await this.copyEntry(original, staging, entry);
       await writeFile(path.join(staging, 'installation.json'), `${JSON.stringify(installed, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
       if (!this.sameInventory(inventory, await this.inventory(original)) || !sameFile(originalInfo, await lstat(original))) throw new LoaderInstallationError('The existing server changed during installation. It was not replaced.', 409);
       await this.dependencies.rename(original, snapshot);
@@ -198,6 +205,7 @@ export class LoaderInstallation {
         archived = false;
         throw error;
       }
+      await this.options.hardening?.seal();
       this.options.log(`Installation ready. The previous server is retained in installation-snapshots/${path.basename(snapshot)}.`);
       return installed;
     } finally {

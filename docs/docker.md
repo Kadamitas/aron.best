@@ -4,17 +4,21 @@ The website and Minecraft run in separate containers. The website stores its pac
 
 All services run as user `10001`, with a read-only root filesystem, dropped Linux capabilities, no privilege escalation, and limits on memory, CPU, processes and retained logs. The controller port stays on a private Compose network. Caddy is the only trusted HTTP proxy and gets its own certificate volumes. Only the website receives the invitation and CurseForge credentials.
 
-Uploaded mods are executable Java code. A malicious mod can damage the Minecraft volume and interact with networks reachable from its container. Containers reduce access to the laptop; they are not a guarantee against kernel or Docker vulnerabilities. Docker Desktop adds a Linux VM boundary on macOS. For stronger isolation, move this stack to a dedicated machine or VM with outbound firewall rules. Do not add a Docker socket, home directory, repository mount, host networking or privileged mode.
+Uploaded mods are executable Java code. The JVM additionally runs under mandatory Landlock and seccomp restrictions. It can read the selected server, write only its approved data paths, and cannot open controller secrets, the runtime trust store, other saved servers, or the controller's process files. Runtime JARs, libraries, launcher metadata and argument files are read-only to the JVM and checked against SHA-256 manifests before each start. Manifests live in the separate `runtime-trust` volume and are published only after a fresh official installation, never by Start. The chosen Java executable is checked against an image-built checksum list.
+
+The Minecraft container has only internal Docker networks with isolated gateway mode. A separate `network-edge` container, with no volumes or secrets, forwards the public game connection and brokers outbound HTTPS. The sandbox allows TCP connections only to private proxy ports 3129 and 443. Both permit only four explicit Mojang authentication and discovery hosts. The TLS relay preserves end-to-end certificate verification and routes only an allowlisted ClientHello server name, because Mojang authlib bypasses ordinary Java proxy settings. Container-local host mappings send those four names to the private edge address. Installer downloads use a separate proxy port inaccessible to mods. UDP, other socket families, subprocess creation, cross-sandbox signals, process-memory access and permission-changing syscalls are denied. The edge rejects private and special DNS answers and pins each connection to its validated address. Ordinary mod web requests, voice-chat UDP, external databases and subprocess-based mods will not work under this policy.
+
+A malicious mod can still damage the active world or other explicitly writable data, consume the container's resource budget, or misuse Minecraft's own permitted connections. Mods run in Minecraft's JVM, so checksums do not prevent a mod from changing the game in memory. Containers and kernel sandboxes are not a guarantee against kernel or Docker vulnerabilities. Docker Desktop adds a Linux VM boundary on macOS. Keep independent backups and the host updated. Never add a Docker socket, home directory, repository mount, host networking, privileged mode, broad filesystem grants or a sandbox fallback.
 
 ## Local preview
 
-Use Docker Desktop or Docker Engine with Compose 2.24.4 or later and Node.js 26 for the host setup scripts. Docker Desktop should have enough memory for the configured Java heap plus the controller and website, at least 8 GB for the default 4 GB heap.
+Use Docker Engine 28 or newer, Compose 2.24.4 or newer, and a Linux kernel with Landlock ABI 6 enabled, normally kernel 6.12 or newer. Docker Desktop must provide those capabilities inside its Linux VM. The controller refuses to initialize if the sandbox probe fails. Host setup scripts use Node.js 26. Docker Desktop should have enough memory for the configured Java heap plus the controller and website, at least 8 GB for the default 4 GB heap.
 
 From the repository root:
 
 ```sh
 node scripts/docker-prepare.mjs
-COMPOSE_PROJECT_NAME=aron-best-preview WEB_SUBNET=172.30.10.0/24 CADDY_ADDRESS=172.30.10.2 APP_ADDRESS=172.30.10.3 docker compose --env-file .runtime/docker/compose.env up --build -d app minecraft
+COMPOSE_PROJECT_NAME=aron-best-preview WEB_SUBNET=172.30.10.0/24 CADDY_ADDRESS=172.30.10.2 APP_ADDRESS=172.30.10.3 GAME_SUBNET=172.30.13.0/24 NETWORK_EDGE_ADDRESS=172.30.13.2 docker compose --env-file .runtime/docker/compose.env up --build -d app minecraft
 node scripts/docker-invite.mjs http://127.0.0.1:3300
 ```
 
@@ -47,7 +51,7 @@ The image versions are configurable with `NODE_IMAGE`, `JAVA_IMAGE`, `JAVA8_IMAG
 | `MINECRAFT_PUBLIC_PORT` | Public game port, default `25565` |
 | `HTTP_BIND_ADDRESS`, `MINECRAFT_BIND_ADDRESS` | Host addresses for public listeners, default `0.0.0.0` |
 | `WEB_SUBNET`, `CADDY_ADDRESS`, `APP_ADDRESS` | Private web network and distinct fixed addresses for Caddy and the app |
-| `IP_GRANTS` | Whether a verified Minecraft join or invitation also grants the observed network access |
+| `GAME_SUBNET`, `NETWORK_EDGE_ADDRESS` | Isolated game network and fixed private proxy address, changed together |
 | `COMPOSE_PROJECT_NAME` | Namespace for containers, networks and persistent volumes |
 
 There is no hardcoded laptop IP in the containers. On a new host, restore the data and secrets, set the domains and resource limits, then point DNS and any router forwarding at the new machine. If using a public game port other than `25565`, include it in `MINECRAFT_ADDRESS` or configure a Minecraft DNS SRV record. An IP address alone does not migrate the world, secrets or certificates.
@@ -60,9 +64,7 @@ The initial loader is Fabric. The workshop's Minecraft and loader labels let inv
 
 The invitation unlocks Basic and Advanced together and installs a signed HttpOnly session cookie. There is no additional Advanced login.
 
-`IP_GRANTS=false` is the Docker Desktop default because Desktop's forwarding may present multiple remote users as the same internal address. Granting that address could accidentally unlock the page for other visitors. Existing IP grants are preserved in the migrated file but are ignored while this setting is false. Existing invite links continue working because their secret is preserved.
-
-On a native Linux host, `IP_GRANTS=true` can retain join-based network access after verifying that the game gateway sees the actual remote player address and that Caddy supplies the actual HTTP client address. Test using two unrelated networks before enabling it. A host-side proxy on Docker Desktop needs an explicit, authenticated source-address handoff before join-based access can be enabled safely; simply trusting arbitrary forwarded headers is insufficient. The private controller port must never be published to make this work.
+IP grants are disabled in this deployment because the isolated game relay and Docker Desktop can present different players as the same internal address. Existing grants remain in stored data but are ignored. Existing invite links continue working because their secret is preserved. Reintroducing join-based grants requires a separately authenticated source-address handoff, not arbitrary forwarded headers or the relay's address.
 
 The app trusts only `CADDY_ADDRESS` for forwarded HTTP headers. If `WEB_SUBNET` conflicts with an existing network, change all three settings together and keep Caddy and the app at different addresses inside that subnet. Fixed addresses prevent startup order from assigning Caddy's trusted address to the app. Do not replace the trusted address with `true`, an arbitrary hop count or a broad network range.
 
@@ -79,11 +81,15 @@ This also stops router lease renewal if it is registered. Verify that the game h
 Build production images, then import into new, empty production volumes:
 
 ```sh
-docker compose --env-file .runtime/docker/compose.env build app minecraft caddy
+docker compose --env-file .runtime/docker/compose.env build app minecraft network-edge caddy
 node scripts/docker-state.mjs import-local --offline-snapshot /absolute/path/to/offline-runtime-copy
+docker compose --env-file .runtime/docker/compose.env up -d network-edge
+docker compose --env-file .runtime/docker/compose.env run --rm --no-deps minecraft node dist/server/reinstall-runtime.js --controller-stopped
 ```
 
 Import sends `pack.json` and `ip-access.json` to the website volume, and `minecraft/` and `backups/` to the controller volume. It rejects symbolic links, hard links and special files, and refuses nonempty destination volumes. It streams the files over standard input; the source directory is never mounted into a container. The original runtime is preserved, and importing starts no website or Minecraft process. A failed partial import is left in place for inspection; use a fresh project namespace to retry after identifying the cause.
+
+The final command reinstalls official runtime files and creates their trust manifests before the imported server can start. Keep the app and controller stopped until it succeeds. See the runtime trust details below if reinstallation fails.
 
 The CurseForge desktop application's host folder is intentionally not mounted into Docker. Use the workshop's mod installation and file tools for this server. The optional publishing archive path can point to a file inside the website data volume when one has been transferred explicitly.
 
@@ -99,6 +105,17 @@ The old macOS LaunchAgent plist files remain after `--stop` and can load again a
 
 ## Back up or move to another host
 
+Runtime trust is deliberately not reconstructed from imported or restored modpack files. After an import or restoration, stop the app and controller, bring up `network-edge`, then rebuild official runtime files while retaining mods, configurations and worlds:
+
+```sh
+docker compose --env-file .runtime/docker/compose.env stop app minecraft
+docker compose --env-file .runtime/docker/compose.env up -d network-edge
+docker compose --env-file .runtime/docker/compose.env run --rm --no-deps minecraft node dist/server/reinstall-runtime.js --controller-stopped
+docker compose --env-file .runtime/docker/compose.env up -d minecraft app
+```
+
+This stages official downloads in an empty directory, resolves runtime dependencies without user mods, verifies the vanilla server against Mojang metadata, retains the previous installation, and publishes a new trust manifest. It never approves existing unknown binaries. An unavailable old loader, unsupported loader cache or failed checksum leaves startup blocked, not downgraded to unsandboxed execution. Preserve enough free disk space and a separate backup before migration. Changing an existing deployment's network definitions also requires stopping and recreating its Compose networks without deleting volumes.
+
 Stop the Docker app and game before exporting so the world and pack metadata form one consistent snapshot:
 
 ```sh
@@ -112,12 +129,16 @@ Export writes `app.tar`, `minecraft.tar` and a SHA-256 manifest in a new private
 On the new host, copy the repository and private Docker configuration, build the images, then restore into empty volumes:
 
 ```sh
-docker compose --env-file .runtime/docker/compose.env build app minecraft caddy
+docker compose --env-file .runtime/docker/compose.env build app minecraft network-edge caddy
 node scripts/docker-state.mjs restore /absolute/path/to/backup-directory
+docker compose --env-file .runtime/docker/compose.env up -d network-edge
+docker compose --env-file .runtime/docker/compose.env run --rm --no-deps minecraft node dist/server/reinstall-runtime.js --controller-stopped
 docker compose --env-file .runtime/docker/compose.env -f compose.yaml -f compose.public.yaml up -d
 ```
 
 Restore checks both archive hashes, stages the archive inside the destination volume, and rejects links, special files, absolute paths and traversal before extracting. It applies private file permissions before publishing restored entries. Leave space for the archive and extracted data during restoration. The manifest detects corruption, not an untrusted backup author, so use only backups you control. Both import and restore refuse running app or Minecraft containers and refuse nonempty volumes. Use `--env-file PATH` on the state script when configuration is elsewhere. Never use `docker compose down --volumes` on a deployment whose data you want to keep.
+
+Do not run the final startup command unless official runtime reinstallation succeeds. Restored archives do not supply trusted runtime manifests.
 
 ## Verification
 
@@ -130,6 +151,8 @@ docker compose --env-file .runtime/docker/compose.env ps
 docker compose --env-file .runtime/docker/compose.env logs --tail 100 app minecraft
 ```
 
-The packaging tests verify privilege restrictions, separate volumes and secrets, the published port boundary, narrow proxy trust, and preservation of credentials during setup. Running tests and validating Compose do not prove a container image has built or a live game has started; those need a Docker build, healthy services and an actual game connection.
+The packaging tests verify privilege restrictions, separate volumes and secrets, isolated gateway networks, the published port boundary, narrow proxy trust, and preservation of credentials during setup. `server/runtime-integrity.test.ts`, `server/runtime-sandbox.test.ts` and `server/network-edge.test.ts` cover trust failures, startup dispatch and outbound policy. `deploy/sandbox/smoke.Dockerfile` runs native adversarial checks against the actual kernel policy. Running tests and validating Compose do not prove a live game or authenticated player login works; those also require deployment checks.
 
 Deployment behavior follows the official [Compose service reference](https://docs.docker.com/reference/compose-file/services/), [Compose secrets reference](https://docs.docker.com/reference/compose-file/secrets/), [Docker Desktop networking guide](https://docs.docker.com/desktop/features/networking/), and [Caddy port configuration](https://caddyserver.com/docs/caddyfile/options#https-port).
+
+Sandbox boundaries follow [Landlock ABI 6](https://kernel.org/doc/html/v6.12/userspace-api/landlock.html), [seccomp filtering](https://docs.kernel.org/userspace-api/seccomp_filter.html), and Docker's [isolated gateway mode](https://docs.docker.com/engine/network/port-publishing/#gateway-modes).

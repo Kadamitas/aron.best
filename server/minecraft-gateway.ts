@@ -9,7 +9,7 @@ export class MinecraftGateway {
   private readonly logins = new Map<string, { port: number; at: number }>();
   private readonly server = createServer(socket => this.connect(socket));
   constructor(private readonly options: {
-    port: number; upstreamPort: number; host?: string;
+    port: number; upstreamPort: number; host?: string; perAddressLimit?: number;
     joined: (ip: string) => Promise<void>; failure: (error: unknown) => void;
   }) {}
 
@@ -27,7 +27,7 @@ export class MinecraftGateway {
 
   private connect(client: Socket): void {
     const ip = normalizeIp(client.remoteAddress!);
-    if (this.sockets.size >= 64 || (this.perIp.get(ip) ?? 0) >= 6) { client.destroy(); return; }
+    if (this.sockets.size >= 64 || (this.perIp.get(ip) ?? 0) >= (this.options.perAddressLimit ?? 6)) { client.destroy(); return; }
     this.sockets.add(client);
     this.perIp.set(ip, (this.perIp.get(ip) ?? 0) + 1);
     client.pause();

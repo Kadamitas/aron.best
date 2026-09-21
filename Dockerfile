@@ -36,6 +36,11 @@ FROM ${JAVA8_IMAGE} AS java8
 FROM ${JAVA17_IMAGE} AS java17
 FROM ${JAVA21_IMAGE} AS java21
 
+FROM ${NODE_IMAGE} AS sandbox-build
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
+COPY deploy/sandbox/launcher.c /build/launcher.c
+RUN cc -O2 -Wall -Wextra -Werror -std=c11 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIE -pie -Wl,-z,relro,-z,now /build/launcher.c -o /build/minecraft-sandbox
+
 FROM runtime AS minecraft
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends libfontconfig1 libfreetype6 && rm -rf /var/lib/apt/lists/*
@@ -43,10 +48,17 @@ COPY --from=java /opt/java/openjdk /opt/java/openjdk
 COPY --from=java8 /opt/java/openjdk /opt/java/8
 COPY --from=java17 /opt/java/openjdk /opt/java/17
 COPY --from=java21 /opt/java/openjdk /opt/java/21
+COPY --from=sandbox-build /build/minecraft-sandbox /usr/local/bin/minecraft-sandbox
+RUN install -d -o 10001 -g 10001 -m 0700 /runtime-trust \
+    && node -e 'const fs=require("node:fs"),crypto=require("node:crypto");fs.writeFileSync("/usr/local/share/minecraft-java.json",JSON.stringify(Object.fromEntries(["openjdk","8","17","21"].map(v=>{const p="/opt/java/"+v+"/bin/java";return[p,crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex")]}))))'
 ENV JAVA_HOME=/opt/java/openjdk JAVA_PATH=/opt/java/openjdk/bin/java CONTAINER_SANDBOX=true
 USER 10001:10001
 EXPOSE 3001 25565
 CMD ["node", "dist/server/controller-index.js"]
+
+FROM runtime AS network-edge
+EXPOSE 25565 3128 3129 443
+CMD ["node", "dist/server/network-edge-index.js"]
 
 FROM ${CADDY_IMAGE} AS caddy
 RUN setcap -r /usr/bin/caddy && mkdir -p /data /config && chown -R 10001:10001 /data /config && chmod 0700 /data /config /data/caddy /config/caddy

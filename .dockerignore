@@ -15,6 +15,8 @@
 !deploy/docker
 !deploy/docker/Caddyfile
 !deploy/docker/restore-state.mjs
+!deploy/sandbox
+!deploy/sandbox/launcher.c
 **/*.test.ts
 **/.DS_Store
 **/.env

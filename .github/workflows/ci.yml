@@ -47,7 +47,7 @@ jobs:
           node --check scripts/docker-profiles-smoke.mjs
           node --test deploy/docker/*.test.mjs
       - name: Build isolated services
-        run: docker compose build app minecraft caddy
+        run: docker compose build app minecraft network-edge caddy
       - name: Test portable state transfer
         env:
           DOCKER_INTEGRATION: 'true'

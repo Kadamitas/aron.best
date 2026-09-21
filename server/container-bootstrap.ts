@@ -3,7 +3,8 @@ import path from 'node:path';
 import { z } from 'zod';
 import { downloadArtifact } from './download.js';
 import type { ControllerConfiguration } from './controller.js';
-import { readInstalled } from './loader-installation.js';
+import { LoaderInstallation, readInstalled } from './loader-installation.js';
+import { RuntimeSandbox } from './runtime-sandbox.js';
 
 export async function assertInstallationPresent(runtimeDirectory: string): Promise<void> {
   const root = path.resolve(runtimeDirectory);
@@ -22,13 +23,21 @@ export async function assertInstallationPresent(runtimeDirectory: string): Promi
   if (retained) throw new Error('The active Minecraft installation is missing or empty while retained installation data exists. Restore the intended server from installation-snapshots or the staged installation before starting. Nothing was bootstrapped.');
 }
 
-export async function bootstrapContainer(configuration: ControllerConfiguration, acceptEula: boolean): Promise<void> {
+export async function bootstrapContainer(configuration: ControllerConfiguration, acceptEula: boolean, dataDirectory = configuration.RUNTIME_DIRECTORY): Promise<void> {
   const directory = path.resolve(configuration.RUNTIME_DIRECTORY, 'minecraft');
   await assertInstallationPresent(configuration.RUNTIME_DIRECTORY);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   if (await readInstalled(directory)) return;
   const launcher = path.join(directory, 'fabric-server-launch.jar');
   const installed = await access(launcher).then(() => true, () => false);
+  if (!installed && configuration.CONTAINER_SANDBOX === 'true') {
+    await writeServerDefaults(directory, acceptEula);
+    const javaPaths = { 8: configuration.JAVA8_PATH, 17: configuration.JAVA17_PATH, 21: configuration.JAVA21_PATH, 25: configuration.JAVA_PATH };
+    const sandbox = new RuntimeSandbox({ directory, dataDirectory, trustDirectory: configuration.RUNTIME_TRUST_DIRECTORY, proxyAddress: configuration.RUNTIME_PROXY_ADDRESS, javaPaths, log: line => process.stdout.write(`${line}\n`) });
+    const installer = new LoaderInstallation({ directory, javaPaths, log: line => process.stdout.write(`${line}\n`), hardening: sandbox.hardening(), installerProxyAddress: configuration.RUNTIME_PROXY_ADDRESS });
+    await installer.install({ minecraftVersion: configuration.MINECRAFT_VERSION, loader: 'Fabric', loaderVersion: configuration.FABRIC_LOADER_VERSION });
+    return;
+  }
   if (installed) {
     const installation = JSON.parse(await readFile(path.join(directory, 'installation.json'), 'utf8')) as { minecraftVersion: string; loaderVersion: string };
     if (installation.minecraftVersion !== configuration.MINECRAFT_VERSION || installation.loaderVersion !== configuration.FABRIC_LOADER_VERSION) throw new Error('Installed Minecraft target differs from configuration. Restore the matching version settings before starting.');

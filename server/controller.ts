@@ -14,6 +14,7 @@ import { assertInstallationPresent, writeServerDefaults } from './container-boot
 import { ServerProfiles } from './server-profiles.js';
 import { createBackupArchive, downloadBackup, type BackupArtifact, type BackupJob } from './backup-archive.js';
 import { WorkspaceActivity } from './workspace-activity.js';
+import { RuntimeSandbox } from './runtime-sandbox.js';
 
 const configurationSchema = z.object({
   HOST: z.enum(['0.0.0.0', '127.0.0.1']).default('0.0.0.0'),
@@ -21,6 +22,8 @@ const configurationSchema = z.object({
   CONTROLLER_TOKEN: z.string().min(32).max(256),
   RUNTIME_DIRECTORY: z.string().default('/data'),
   CONTAINER_SANDBOX: z.enum(['true', 'false']).default('false'),
+  RUNTIME_TRUST_DIRECTORY: z.string().default('/runtime-trust'),
+  RUNTIME_PROXY_ADDRESS: z.string().ipv4().default('172.30.3.2'),
   JAVA_PATH: z.string().default('/opt/java/openjdk/bin/java'),
   JAVA8_PATH: z.string().default('/opt/java/8/bin/java'),
   JAVA17_PATH: z.string().default('/opt/java/17/bin/java'),
@@ -56,12 +59,13 @@ export async function createController(configuration = readControllerConfigurati
   const record = (message: string) => { activity.unshift({ id: randomUUID(), message, timestamp: new Date().toISOString() }); activity.splice(60); };
   const app = Fastify({ logger: false, bodyLimit: 16 * 1024, requestTimeout: 30_000, connectionTimeout: 10_000 });
   const gateway = configuration.MINECRAFT_GATEWAY === 'true' ? new MinecraftGateway({
-    port: 25565, upstreamPort: 25566,
+    port: 25565, upstreamPort: 25566, perAddressLimit: configuration.CONTAINER_SANDBOX === 'true' ? 64 : 6,
     joined: async ip => { joins.push({ id: randomUUID(), ip }); if (joins.length > 100) joins.shift(); },
     failure: () => record('The Minecraft gateway reported a connection error.'),
   }) : undefined;
   const javaPaths = { 8: configuration.JAVA8_PATH, 17: configuration.JAVA17_PATH, 21: configuration.JAVA21_PATH, 25: configuration.JAVA_PATH };
-  const installerFor = (directory: string, log: (line: string) => void) => dependencies.installationFactory?.(directory, log) ?? dependencies.installations ?? new LoaderInstallation({ directory, javaPaths, log });
+  const sandboxFor = (directory: string, log: (line: string) => void) => configuration.CONTAINER_SANDBOX === 'true' ? new RuntimeSandbox({ directory, dataDirectory: configuration.RUNTIME_DIRECTORY, trustDirectory: configuration.RUNTIME_TRUST_DIRECTORY, proxyAddress: configuration.RUNTIME_PROXY_ADDRESS, javaPaths, log }) : undefined;
+  const installerFor = (directory: string, log: (line: string) => void) => dependencies.installationFactory?.(directory, log) ?? dependencies.installations ?? new LoaderInstallation({ directory, javaPaths, log, hardening: sandboxFor(directory, log)?.hardening(), installerProxyAddress: configuration.CONTAINER_SANDBOX === 'true' ? configuration.RUNTIME_PROXY_ADDRESS : undefined });
   async function runtimeFor(root: string) {
     await assertInstallationPresent(root);
     const directory = path.join(root, 'minecraft');
@@ -69,6 +73,7 @@ export async function createController(configuration = readControllerConfigurati
     const server = new MinecraftServer({ directory, java: configuration.JAVA_PATH, javaPaths, loaderVersion: configuration.FABRIC_LOADER_VERSION, memoryMb: configuration.MINECRAFT_MEMORY_MB,
       version: configuration.MINECRAFT_VERSION, address: configuration.MINECRAFT_ADDRESS, activity: record,
       requireOnlineMode: Boolean(gateway), onLog: line => gateway?.observeLog(line),
+      sandbox: sandboxFor(directory, line => record(line)),
     }, dependencies.minecraft);
     await server.initialize();
     const changes = new WorkspaceActivity(root);
@@ -288,6 +293,7 @@ export async function createController(configuration = readControllerConfigurati
   });
   app.post('/action', { bodyLimit: 256 * 1024 }, async request => {
     const body = z.object({ action: z.enum(['start', 'stop', 'restart', 'backup', 'update', 'sync-profile']), downloads: z.array(downloadSchema).max(150).optional() }).strict().parse(request.body);
+    request.raw.setTimeout?.(15 * 60_000);
     await exclusive(async () => {
       await server.action(body.action, async () => {
         if (!body.downloads) throw new Error('No verified mod download list was provided.');

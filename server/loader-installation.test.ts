@@ -261,3 +261,79 @@ test('installation descriptors reject arbitrary JVM flags, outside paths, forged
   await symlink(path.join(setup.directory, 'server.properties'), descriptor);
   await assert.rejects(readInstalled(setup.directory), /links/);
 });
+
+test('trusted preparation runs before modpack data is copied and sealing runs only after the committed swap', async t => {
+  const setup = await fixture(t);
+  const events: string[] = [];
+  const service = new LoaderInstallation({ ...setup.options, hardening: {
+    prepare: async (staging, installed, source) => {
+      events.push('prepare');
+      assert.notEqual(staging, setup.directory);
+      assert.deepEqual(installed.launchArgs, ['-jar', 'fabric-server-launch.jar']);
+      assert.deepEqual({ sha1: source.sha1, size: source.size }, { sha1: hash(vanilla), size: vanilla.length });
+      assert.equal(await readFile(path.join(staging, 'fabric-server-launch.jar'), 'utf8'), installer.toString());
+      for (const preserved of ['mods', 'config', 'world', 'eula.txt', 'server.properties']) await assert.rejects(readFile(path.join(staging, preserved)), { code: 'ENOENT' });
+      await mkdir(path.join(staging, 'libraries', 'prepared'), { recursive: true });
+      await writeFile(path.join(staging, 'libraries', 'prepared', 'runtime.jar'), 'trusted-prepared-runtime');
+    },
+    seal: async () => {
+      events.push('seal');
+      assert.equal((await readInstalled(setup.directory))?.loader, 'Fabric');
+      assert.equal(await readFile(path.join(setup.directory, 'libraries', 'prepared', 'runtime.jar'), 'utf8'), 'trusted-prepared-runtime');
+      assert.equal(await readFile(path.join(setup.directory, 'mods', 'existing.jar'), 'utf8'), 'mod bytes');
+      assert.equal(await readFile(path.join(setup.directory, 'world', 'level.dat'), 'utf8'), 'world bytes');
+    },
+  } }, { ...setup.dependencies, rename: async (source, destination) => {
+    events.push(path.basename(String(source)) === 'minecraft' ? 'archive-original' : 'commit-staging');
+    await rename(source, destination);
+  } });
+  await service.install(fabric);
+  assert.deepEqual(events, ['prepare', 'archive-original', 'commit-staging', 'seal']);
+});
+
+test('failed trusted preparation never seals or replaces the original runtime', async t => {
+  const setup = await fixture(t);
+  let seals = 0;
+  const service = new LoaderInstallation({ ...setup.options, hardening: { prepare: async () => { throw new Error('trusted preparation failed'); }, seal: async () => { seals++; } } }, setup.dependencies);
+  await assert.rejects(service.install(fabric), /trusted preparation failed/);
+  assert.equal(seals, 0);
+  assert.equal(await readFile(path.join(setup.directory, 'fabric-server-launch.jar'), 'utf8'), 'previous launcher');
+  assert.equal(await readFile(path.join(setup.directory, 'mods', 'existing.jar'), 'utf8'), 'mod bytes');
+  assert.deepEqual(await readdir(path.join(setup.root, 'installation-snapshots')), []);
+});
+
+test('failed installation commit never publishes new trust over a restored original runtime', async t => {
+  let moves = 0;
+  let seals = 0;
+  const setup = await fixture(t, { rename: async (source, destination) => { if (++moves === 2) throw new Error('commit failed'); await rename(source, destination); } });
+  const service = new LoaderInstallation({ ...setup.options, hardening: { prepare: async () => undefined, seal: async () => { seals++; } } }, setup.dependencies);
+  await assert.rejects(service.install(fabric), /commit failed/);
+  assert.equal(seals, 0);
+  assert.equal(await readFile(path.join(setup.directory, 'fabric-server-launch.jar'), 'utf8'), 'previous launcher');
+  assert.equal(await readFile(path.join(setup.directory, 'world', 'level.dat'), 'utf8'), 'world bytes');
+});
+
+test('failed seal keeps the prior installation snapshot and reports failure rather than trusting the new runtime', async t => {
+  const setup = await fixture(t);
+  const service = new LoaderInstallation({ ...setup.options, hardening: { prepare: async () => undefined, seal: async () => { throw new Error('seal publication failed'); } } }, setup.dependencies);
+  await assert.rejects(service.install(fabric), /seal publication failed/);
+  assert.equal(await readFile(path.join(setup.directory, 'fabric-server-launch.jar'), 'utf8'), installer.toString());
+  const snapshots = await readdir(path.join(setup.root, 'installation-snapshots'));
+  assert.equal(snapshots.length, 1);
+  assert.equal(await readFile(path.join(setup.root, 'installation-snapshots', snapshots[0]!, 'fabric-server-launch.jar'), 'utf8'), 'previous launcher');
+  assert(!setup.logs.some(line => line.startsWith('Installation ready.')));
+});
+
+test('old executable root files are never preserved into a newly trusted runtime', async t => {
+  const setup = await fixture(t);
+  const unsafe = ['arbitrary.jar', 'minecraftforge-universal-1.6.4-9.11.1.1345.jar', 'injected.args', 'helper.sh', 'native.so', 'Payload.class'];
+  for (const name of unsafe) await writeFile(path.join(setup.directory, name), 'previous untrusted runtime');
+  let sealed = false;
+  const service = new LoaderInstallation({ ...setup.options, hardening: { prepare: async () => undefined, seal: async () => {
+    for (const name of unsafe) await assert.rejects(readFile(path.join(setup.directory, name)), { code: 'ENOENT' });
+    sealed = true;
+  } } }, setup.dependencies);
+  await service.install(fabric);
+  assert.equal(sealed, true);
+  assert.equal(await readFile(path.join(setup.directory, 'mods', 'existing.jar'), 'utf8'), 'mod bytes');
+});

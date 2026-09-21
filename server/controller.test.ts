@@ -247,3 +247,22 @@ test('version installation is authenticated, exclusive, stopped and reports fail
     assert.equal((await setup.app.inject({ method: 'POST', url: '/installation', headers: authorization, payload: target })).statusCode, 409);
   } finally { release(); await setup.dispose(); }
 });
+
+test('authenticated controller actions extend the socket timeout for long-running lifecycle work', async () => {
+  const setup = await fixture(true);
+  try {
+    setup.app.server.setTimeout(20);
+    await setup.app.listen({ host: '127.0.0.1', port: 0 });
+    const address = setup.app.server.address();
+    assert(address && typeof address !== 'string');
+    const started = Date.now();
+    const response = await fetch(`http://127.0.0.1:${address.port}/action`, {
+      method: 'POST', headers: { ...authorization, 'content-type': 'application/json' }, body: JSON.stringify({ action: 'start' }), signal: AbortSignal.timeout(5000),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { completed: true });
+    assert(Date.now() - started >= 450);
+    assert.equal(setup.app.server.timeout, 20);
+    assert.equal((await setup.app.inject({ url: '/status', headers: authorization })).json().server.state, 'running');
+  } finally { await setup.dispose(); }
+});

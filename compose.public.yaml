@@ -2,7 +2,7 @@ services:
   app:
     environment:
       PUBLIC_ORIGIN: https://${WORKSHOP_HOST:-mc.modpack.aron.best}
-  minecraft:
+  network-edge:
     ports: !override
       - target: 25565
         published: "${MINECRAFT_PUBLIC_PORT:-25565}"

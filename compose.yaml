@@ -40,7 +40,7 @@ services:
       CONTROLLER_URL: http://minecraft:3001
       CONTROLLER_TOKEN_FILE: /run/secrets/controller_token
       TRUST_PROXY: ${CADDY_ADDRESS:-172.30.1.2}
-      IP_GRANTS: ${IP_GRANTS:-false}
+      IP_GRANTS: "false"
       MINECRAFT_VERSION: ${MINECRAFT_VERSION:-26.3}
       FABRIC_LOADER_VERSION: ${FABRIC_LOADER_VERSION:-0.19.5}
       MINECRAFT_ADDRESS: ${MINECRAFT_ADDRESS:-mc.aron.best}
@@ -90,6 +90,12 @@ services:
       CONTROLLER_PORT: "3001"
       CONTROLLER_TOKEN_FILE: /run/secrets/controller_token
       CONTAINER_SANDBOX: "true"
+      RUNTIME_TRUST_DIRECTORY: /runtime-trust
+      RUNTIME_PROXY_ADDRESS: ${NETWORK_EDGE_ADDRESS:-172.30.3.2}
+      NODE_USE_ENV_PROXY: "1"
+      HTTP_PROXY: http://${NETWORK_EDGE_ADDRESS:-172.30.3.2}:3128
+      HTTPS_PROXY: http://${NETWORK_EDGE_ADDRESS:-172.30.3.2}:3128
+      NO_PROXY: localhost,127.0.0.1
       RUNTIME_DIRECTORY: /data
       JAVA_PATH: /opt/java/openjdk/bin/java
       MINECRAFT_VERSION: ${MINECRAFT_VERSION:-26.3}
@@ -100,15 +106,19 @@ services:
       MINECRAFT_AUTOSTART: ${MINECRAFT_AUTOSTART:-false}
       BOOTSTRAP_MINECRAFT: ${BOOTSTRAP_MINECRAFT:-true}
       EULA_ACCEPTED: ${EULA_ACCEPTED:-true}
-    ports:
-      - target: 25565
-        published: "${MINECRAFT_PUBLISHED_PORT:-25575}"
-        host_ip: 127.0.0.1
-        protocol: tcp
     volumes:
       - minecraft-data:/data
+      - runtime-trust:/runtime-trust
     secrets: [controller_token]
     networks: [control, game]
+    extra_hosts:
+      - sessionserver.mojang.com:${NETWORK_EDGE_ADDRESS:-172.30.3.2}
+      - api.minecraftservices.com:${NETWORK_EDGE_ADDRESS:-172.30.3.2}
+      - api.mojang.com:${NETWORK_EDGE_ADDRESS:-172.30.3.2}
+      - discovery.minecraftservices.com:${NETWORK_EDGE_ADDRESS:-172.30.3.2}
+    depends_on:
+      network-edge:
+        condition: service_healthy
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=1770
     pids_limit: 512
@@ -121,6 +131,38 @@ services:
       timeout: 5s
       retries: 3
       start_period: 120s
+
+  network-edge:
+    <<: *runtime
+    build:
+      context: .
+      target: network-edge
+      args: *build-args
+    image: ${NETWORK_EDGE_IMAGE:-aron-best-network-edge:local}
+    ports:
+      - target: 25565
+        published: "${MINECRAFT_PUBLISHED_PORT:-25575}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes: []
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    networks:
+      game:
+        ipv4_address: ${NETWORK_EDGE_ADDRESS:-172.30.3.2}
+      edge: {}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=1770
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 1
+    stop_grace_period: 20s
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3130/health',{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   caddy:
     <<: *runtime
@@ -176,6 +218,7 @@ secrets:
 volumes:
   app-state: {}
   minecraft-data: {}
+  runtime-trust: {}
   caddy-data: {}
   caddy-config: {}
 
@@ -187,6 +230,16 @@ networks:
         - subnet: ${WEB_SUBNET:-172.30.1.0/24}
   control:
     internal: true
-  game: {}
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+      com.docker.network.bridge.gateway_mode_ipv6: isolated
+  game:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+      com.docker.network.bridge.gateway_mode_ipv6: isolated
+    ipam:
+      config:
+        - subnet: ${GAME_SUBNET:-172.30.3.0/24}
   edge: {}
   app-egress: {}
