@@ -1,5 +1,8 @@
 {
 	admin 127.0.0.1:2019
+	# Contact for the certificate authorities. With an email set, Caddy also
+	# uses ZeroSSL, so a Let's Encrypt rate limit does not block issuance.
+	email agmlodkowski@gmail.com
 	http_port 80
 	https_port 443
 	servers {
