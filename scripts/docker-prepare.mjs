@@ -1,3 +1,4 @@
+import { totalmem } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { chmod, lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -51,6 +52,9 @@ for (const [name, content] of Object.entries({
   await createFile(path.join(destination, 'secrets', name), content, 0o444);
 }
 
+const gameMemoryLimitMiB = Math.floor(totalmem() / 1048576 * 0.8);
+const gameHeapMiB = Math.max(2048, gameMemoryLimitMiB - 1536);
+
 const settings = {
   COMPOSE_PROJECT_NAME: 'aron-best',
   PORTFOLIO_HOST: 'aron.best',
@@ -60,9 +64,12 @@ const settings = {
   MINECRAFT_ADDRESS: value('MINECRAFT_ADDRESS', 'mc.aron.best'),
   MINECRAFT_VERSION: value('MINECRAFT_VERSION', '26.3'),
   FABRIC_LOADER_VERSION: value('FABRIC_LOADER_VERSION', '0.19.5'),
-  MINECRAFT_MEMORY_MB: value('MINECRAFT_MEMORY_MB', '4096'),
-  MINECRAFT_MEMORY_LIMIT: '6g',
-  MINECRAFT_CPUS: '4',
+  // The game may use up to 80% of this Mac's memory. The JVM heap stays 1.5 GiB
+  // under the container limit for off-heap memory; the Docker VM must be sized above it.
+  MINECRAFT_MEMORY_MB: value('MINECRAFT_MEMORY_MB', String(gameHeapMiB)),
+  MINECRAFT_MEMORY_LIMIT: `${gameMemoryLimitMiB}m`,
+  MINECRAFT_CPUS: '6',
+  MINECRAFT_START_TIMEOUT_SECONDS: value('MINECRAFT_START_TIMEOUT_SECONDS', '600'),
   MINECRAFT_AUTOSTART: 'false',
   BOOTSTRAP_MINECRAFT: 'true',
   EULA_ACCEPTED: 'true',

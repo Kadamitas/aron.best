@@ -14,6 +14,7 @@ import { MinecraftGateway } from './minecraft-gateway.js';
 import { LocalProfileService, validateProfilePath, type LocalProfileSnapshot } from './local-profile.js';
 import { ModpackFiles } from './modpack-files.js';
 import { ControllerClient } from './controller-client.js';
+import { backupIdSchema } from './backup-history.js';
 import { withSecrets } from './secrets.js';
 import { inviteCookie, validInviteCookie } from './invite-session.js';
 
@@ -32,7 +33,8 @@ const environmentSchema = z.object({
   MINECRAFT_VERSION: z.string().regex(/^[a-zA-Z0-9.\-]+$/).default('26.3'),
   FABRIC_LOADER_VERSION: z.string().regex(/^[0-9.]+$/).default('0.19.5'),
   JAVA_PATH: z.string().default('/opt/homebrew/opt/openjdk@25/bin/java'),
-  MINECRAFT_MEMORY_MB: z.coerce.number().int().min(1024).max(8192).default(4096),
+  MINECRAFT_MEMORY_MB: z.coerce.number().int().min(1024).max(65536).default(4096),
+  MINECRAFT_START_TIMEOUT_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
   MINECRAFT_ADDRESS: z.string().default('mc.aron.best'),
   WORKSHOP_NAME: z.string().min(1).max(100).default('Dictionary Minecraft Server'),
   MINECRAFT_AUTOSTART: z.enum(['true', 'false']).default('false'),
@@ -119,7 +121,7 @@ export async function createApp(configuration = readConfiguration(), dependencie
   });
   const minecraft = remote ?? new MinecraftServer({ directory: path.join(runtimeDirectory, 'minecraft'), java: configuration.JAVA_PATH,
     memoryMb: configuration.MINECRAFT_MEMORY_MB, version: configuration.MINECRAFT_VERSION, address: configuration.MINECRAFT_ADDRESS, activity: record,
-    onLog: line => gateway?.observeLog(line), requireOnlineMode: Boolean(gateway) }, dependencies.minecraft);
+    onLog: line => gateway?.observeLog(line), requireOnlineMode: Boolean(gateway), startTimeoutMs: configuration.MINECRAFT_START_TIMEOUT_SECONDS * 1000 }, dependencies.minecraft);
   await minecraft.initialize();
   const workspace = remote?.workspace ?? new ModpackFiles(path.join(runtimeDirectory, 'minecraft'));
   const observedJoins = new Set<string>();
@@ -140,6 +142,7 @@ export async function createApp(configuration = readConfiguration(), dependencie
     } finally { polling = false; }
   }
   let globalWindow = Date.now(); let globalRequests = 0; let jobRunning = false; let packMutationRunning = false;
+  let jobOperation: string | undefined;
   async function mutatePack<T>(operation: () => Promise<T>): Promise<T> {
     if (packMutationRunning) throw Object.assign(new Error('A pack change is already being processed. Try again when it finishes.'), { statusCode: 409 });
     packMutationRunning = true;
@@ -184,6 +187,7 @@ export async function createApp(configuration = readConfiguration(), dependencie
       const devOrigins = ['http://localhost:4200', 'http://127.0.0.1:4200', 'http://localhost:3000', 'http://127.0.0.1:3000'];
       const acceptable = origin === configuration.PUBLIC_ORIGIN || (isLocal && origin && devOrigins.includes(origin));
       if (!acceptable) return reply.code(403).send({ error: 'The request must come from the workshop page.' });
+      if (route.startsWith('/api/workspace/') || route === '/api/server/profiles/restore') request.raw.setTimeout?.(15 * 60_000);
     }
   });
   app.setErrorHandler((error, _request, reply) => {
@@ -211,7 +215,8 @@ export async function createApp(configuration = readConfiguration(), dependencie
     const crash = permitted && server.failure ? await (remote && controller ? remote.forProfile(controller.profiles.activeId, () => remote.latestCrashReport()).catch(() => null) : minecraft.latestCrashReport()) : null;
     const relevant = crash && server.failure && Date.parse(crash.createdAt) >= Date.parse(server.failure.at) - 5 * 60_000;
     const crashLog = relevant ? [`# ${crash.file} (${crash.createdAt})`, ...crash.lines] : permitted && server.failure ? (await (remote && controller ? remote.forProfile(controller.profiles.activeId, () => remote.logs()).catch(() => []) : minecraft.logs())).slice(-80) : undefined;
-    return { server: { ...server, ...(crashLog ? { crashLog } : {}) }, ...(controller ? { profiles: controller.profiles, workspace: controller.workspace } : {}), pack: { ...current, name: configuration.WORKSHOP_NAME, ...(remote ? { minecraftVersion: target.version, loader: target.loader, loaderVersion: target.loaderVersion } : {}) }, history: current.history, requests: current.requests,
+    const operation = controller?.server.operation ?? jobOperation;
+    return { server: { ...server, ...(operation ? { operation } : {}), ...(crashLog ? { crashLog } : {}) }, ...(controller ? { profiles: controller.profiles, workspace: controller.workspace } : {}), pack: { ...current, name: configuration.WORKSHOP_NAME, ...(remote ? { minecraftVersion: target.version, loader: target.loader, loaderVersion: target.loaderVersion } : {}) }, history: current.history, requests: current.requests,
       capabilities: { authorized: permitted, workspaceWrite: Boolean(remote?.isolated), ipWhitelisted: configuration.IP_GRANTS === 'true' && ipAccess.allows(request.ip), joinAccess: configuration.IP_GRANTS === 'true' && Boolean(gateway || remote), curseforgeSearch: client.configured, localProfile: localProfile.configured, publish: Boolean(client.publishingConfigured && projectId && configuration.CURSEFORGE_EXPORT_PATH), update: Boolean(client.configured && projectId), server: minecraft.status().state !== 'not-installed' },
       activity: permitted ? [...activity, ...(controller?.activity ?? [])].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, 60) : [], jobRunning: jobRunning || server.busy };
   });
@@ -330,7 +335,7 @@ export async function createApp(configuration = readConfiguration(), dependencie
     const body = z.object({ displayName: z.string().trim().min(1).max(100), changelog: z.string().trim().min(1).max(8000) }).strict().parse(request.body);
     const result = await mutatePack(() => pack.publish(body.displayName, body.changelog)); record('Release submitted to CurseForge for review.'); return result;
   });
-  for (const action of ['create', 'select', 'rename', 'remove'] as const) {
+  for (const action of ['create', 'select', 'rename', 'remove', 'restore'] as const) {
     app.post(action === 'create' ? '/api/server/profiles' : `/api/server/profiles/${action}`, { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
       if (!remote || !(await remote.refresh()).isolated) throw Object.assign(new Error('Saved servers require the isolated Minecraft container.'), { statusCode: 409 });
       const name = z.string().trim().min(1).max(64);
@@ -351,6 +356,18 @@ export async function createApp(configuration = readConfiguration(), dependencie
     return reply.code(202).send(await remote!.install(target));
   });
   app.get('/api/server/logs', async () => ({ lines: await minecraft.logs() }));
+  app.get('/api/server/recovery', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async () => {
+    if (!remote) throw Object.assign(new Error('Recovery requires the isolated Minecraft container.'), { statusCode: 409 });
+    return remote.recovery();
+  });
+  app.get('/api/server/recovery/backups/:profileId/:id/download', { config: { rateLimit: { max: 6, timeWindow: '10 minutes' } } }, async (request, reply) => {
+    const { profileId, id } = z.object({ profileId: z.string().uuid(), id: backupIdSchema }).parse(request.params);
+    if (!remote) throw Object.assign(new Error('Recovery requires the isolated Minecraft container.'), { statusCode: 409 });
+    request.raw.setTimeout?.(30 * 60_000);
+    const archive = await remote.downloadSavedBackup(profileId, id);
+    reply.raw.once('close', () => archive.stream.destroy());
+    return reply.type('application/gzip').header('Content-Disposition', `attachment; filename="dictionary-minecraft-backup-${id}.tar.gz"`).header('Content-Length', archive.size).send(archive.stream);
+  });
   app.post('/api/server/backups', { config: { rateLimit: { max: 4, timeWindow: '10 minutes' } } }, async (request, reply) => {
     z.object({}).strict().parse(request.body);
     if (!remote) throw Object.assign(new Error('Backup downloads require the isolated Minecraft container.'), { statusCode: 409 });
@@ -365,6 +382,7 @@ export async function createApp(configuration = readConfiguration(), dependencie
   app.get('/api/server/backups/:id/download', { config: { rateLimit: { max: 6, timeWindow: '10 minutes' } } }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     if (!remote) throw Object.assign(new Error('Backup downloads require the isolated Minecraft container.'), { statusCode: 409 });
+    request.raw.setTimeout?.(30 * 60_000);
     const job = await remote.backup(id);
     if (job.state !== 'ready' || !job.filename) throw Object.assign(new Error(job.error ?? 'This backup is still being prepared.'), { statusCode: 409 });
     const archive = await remote.downloadBackup(id);
@@ -387,6 +405,7 @@ export async function createApp(configuration = readConfiguration(), dependencie
     if (action === 'sync-profile' && !localProfile.configured) return reply.code(409).send({ error: 'The host must configure the CurseForge App profile path before syncing.' });
     if (jobRunning) return reply.code(409).send({ error: 'A server operation is already running.' });
     jobRunning = true;
+    jobOperation = { start: 'Starting server', stop: 'Shutting down server', restart: 'Restarting server', backup: 'Saving backup', update: 'Updating modpack', 'sync-profile': 'Syncing modpack' }[action];
     const label = action === 'sync-profile' ? 'App pack sync' : `Server ${action}`;
     record(`${label} requested.`);
     let synced: LocalProfileSnapshot | undefined;
@@ -411,7 +430,7 @@ export async function createApp(configuration = readConfiguration(), dependencie
     void minecraft.action(action, resolveDownloads).then(async () => {
       // The draft only changes after the server accepted the new files and restarted.
       if (synced) { await mutatePack(() => pack.importLocalProfile(synced!.pack)); record('The draft now matches the synced App profile.'); }
-    }).catch(error => { record(`${label} failed: ${(error as Error).message}`); app.log.error({ message: (error as Error).message }, 'Server operation failed'); }).finally(() => { jobRunning = false; });
+    }).catch(error => { record(`${label} failed: ${(error as Error).message}`); app.log.error({ message: (error as Error).message }, 'Server operation failed'); }).finally(() => { jobRunning = false; jobOperation = undefined; });
     return reply.code(202).send({ accepted: true, action });
   });
   const browserRoot = path.resolve('dist/aron-best/browser');
