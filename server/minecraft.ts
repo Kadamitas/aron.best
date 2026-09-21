@@ -248,7 +248,7 @@ export class MinecraftServer {
     while (Date.now() < deadline) {
       if (this.status().state === 'running') return;
       if (!this.process) throw new Error('Minecraft could not start. Check the server log.');
-      await delay(500);
+      await delay(200);
     }
     await this.stop();
     this.state = 'failed';
