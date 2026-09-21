@@ -28,10 +28,10 @@ if [[ ! -f dist/server/index.js || ! -f dist/aron-best/browser/index.html ]]; th
   ok "Built."
 fi
 
-if node scripts/install-services.mjs --install --with-router >/dev/null 2>.runtime/last-install.log; then
+if [[ -f .runtime/deploy/router-settings.json ]] && grep -q "\"status\": \"ready\"" .runtime/deploy/router-status.json 2>/dev/null && node scripts/install-services.mjs --install --with-router >/dev/null 2>.runtime/last-install.log; then
   ok "Website, proxies, and router lease renewal are registered with launchd."
 elif node scripts/install-services.mjs --install >/dev/null 2>>.runtime/last-install.log; then
-  warn "Router forwarding could not be prepared (not on the home network?). Website services are registered."
+  ok "Website and proxies are registered with launchd. Port forwarding is handled by the GFiber rules."
 else
   fail "Could not register the services. Details:"
   sed 's/^/    /' .runtime/last-install.log
