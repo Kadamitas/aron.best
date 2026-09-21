@@ -165,7 +165,10 @@ async function main(settingsPath) {
       const message = error instanceof Error ? error.message : 'Unknown router renewal failure';
       state = { status: 'blocked', checkedAt: new Date().toISOString(), lastSuccessAt, message };
       console.error(`${state.checkedAt} Router renewal blocked: ${message}`);
-      wait = retryMilliseconds;
+      // "606 Action not authorized" means UPnP mapping is disabled on the router: a settings
+      // problem, not a network drop, so there is no point retrying every minute.
+      wait = /606|not authorized/i.test(message) ? renewalMilliseconds : retryMilliseconds;
+      if (/606|not authorized/i.test(message)) console.error('The GFiber router refuses UPnP port mappings. Enable UPnP in the Google Fiber app, or add the three TCP rules there by hand (80 -> 8080, 443 -> 8443, 25565 -> 25565).');
     }
     const temporary = `${settings.statusPath}.part`;
     await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
