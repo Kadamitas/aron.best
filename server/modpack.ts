@@ -16,6 +16,12 @@ export type Mod = Omit<z.infer<typeof modSchema>, 'fileId' | 'version' | 'explic
   fileId?: number; version?: string; explicit?: boolean; dependencies?: number[]; conflicts?: number[]; requiredBy?: number[];
 };
 export type SelectedMod = z.infer<typeof modSchema>;
+const historicalModSchema = modSchema.extend({ removedAt: z.string().datetime() });
+const requestSchema = z.object({
+  id: z.string().uuid(), url: z.string().url(), slug: z.string(),
+  submittedAt: z.string().datetime(), status: z.enum(['pending', 'installed']),
+});
+export type ModRequest = z.infer<typeof requestSchema>;
 const releaseSchema = z.object({
   id: z.string(), displayName: z.string(), version: z.string(), createdAt: z.string(),
   archiveSha256: z.string(), status: z.enum(['uploading', 'pending-review', 'uncertain']), fileId: id.optional(),
@@ -25,8 +31,42 @@ const packSchema = z.object({
   name: z.string().min(1).max(100), minecraftVersion: z.string().min(1).max(40), loader: loaderSchema,
   loaderVersion: z.string().min(1).max(40), version: z.string().regex(/^\d+\.\d+\.\d+$/),
   mods: z.array(modSchema).max(150), releases: z.array(releaseSchema).max(1000),
+  history: z.array(historicalModSchema).max(500).default([]),
+  requests: z.array(requestSchema).max(200).default([]),
 });
 export type Pack = z.infer<typeof packSchema>;
+
+/** Store a link as a request, never fetch it or treat its contents as executable instructions. */
+export function parseModLink(value: string): { url: string; slug: string } {
+  const invalid = () => new CurseForgeError('INVALID_MOD_LINK', 'Use a CurseForge Minecraft mod page or a specific mod file link.', 400);
+  if (value.length > 2048) throw invalid();
+  let url: URL;
+  try { url = new URL(value.trim()); } catch { throw invalid(); }
+  if (url.protocol !== 'https:' || !['curseforge.com', 'www.curseforge.com'].includes(url.hostname)
+    || url.username || url.password || url.port) throw invalid();
+  const match = /^\/minecraft\/mc-mods\/([a-z0-9][a-z0-9-]{0,149})(?:\/files\/([1-9]\d{0,14}))?\/?$/.exec(url.pathname.toLowerCase());
+  const slug = match?.[1];
+  if (!slug) throw invalid();
+  return { url: `https://www.curseforge.com/minecraft/mc-mods/${slug}${match[2] ? `/files/${match[2]}` : ''}`, slug };
+}
+
+function requestIsInstalled(request: Pick<ModRequest, 'slug' | 'url'>, mods: SelectedMod[]): boolean {
+  const fileId = request.url.match(/\/files\/(\d+)$/)?.[1];
+  return mods.some(mod => {
+    try { return Boolean(mod.websiteUrl && parseModLink(mod.websiteUrl).slug === request.slug && (!fileId || mod.fileId === Number(fileId))); }
+    catch { return false; }
+  });
+}
+
+function recordRemovedMods(pack: Pack, incoming: SelectedMod[]): void {
+  const currentIds = new Set(incoming.map(mod => mod.id));
+  const history = new Map(pack.history.map(mod => [mod.id, mod]));
+  for (const mod of pack.mods) {
+    if (!currentIds.has(mod.id)) history.set(mod.id, { ...mod, removedAt: new Date().toISOString() });
+  }
+  pack.history = [...history.values()].filter(mod => !currentIds.has(mod.id))
+    .sort((a, b) => b.removedAt.localeCompare(a.removedAt)).slice(0, 500);
+}
 
 export function parseInstalledProfile(input: unknown): { pack: Pack; files: Download[] } {
   const installedFileSchema = z.object({
@@ -234,6 +274,40 @@ export class PackService {
 
   async getPack(): Promise<Pack> { await this.initialize(); return structuredClone(this.state!); }
 
+  async requestMod(value: string): Promise<ModRequest> {
+    const link = parseModLink(value);
+    return this.serial(async () => {
+      const pack = await this.getPack();
+      const duplicate = pack.requests.find(request => request.url === link.url);
+      if (duplicate) return structuredClone(duplicate);
+      if (pack.requests.length >= 200) throw new CurseForgeError('REQUEST_LIMIT', 'The request list has reached 200 links. Ask the host to review it before adding more.', 409);
+      const request: ModRequest = { ...link, id: randomUUID(), submittedAt: new Date().toISOString(),
+        status: requestIsInstalled(link, pack.mods) ? 'installed' : 'pending' };
+      pack.requests.unshift(request);
+      await this.persist(pack);
+      return structuredClone(request);
+    });
+  }
+
+  async importLocalProfile(input: Pack): Promise<Pack> {
+    const incoming = packSchema.parse(input);
+    return this.serial(async () => {
+      const pack = await this.getPack();
+      if (incoming.name !== pack.name || incoming.minecraftVersion !== pack.minecraftVersion
+        || incoming.loader !== pack.loader || incoming.loaderVersion !== pack.loaderVersion) {
+        throw new CurseForgeError('PROFILE_TARGET_MISMATCH', 'The configured local profile must match this pack name, Minecraft version, and loader.');
+      }
+      const signature = (mods: SelectedMod[]) => mods.map(mod => `${mod.id}:${mod.fileId}`).sort().join(',');
+      const changed = signature(pack.mods) !== signature(incoming.mods);
+      recordRemovedMods(pack, incoming.mods);
+      pack.mods = incoming.mods;
+      pack.requests = pack.requests.map(request => ({ ...request, status: requestIsInstalled(request, pack.mods) ? 'installed' as const : 'pending' as const }));
+      if (changed) pack.version = nextVersion(pack.version);
+      await this.persist(pack);
+      return structuredClone(pack);
+    });
+  }
+
   async search(query: string): Promise<Mod[]> {
     const pack = await this.getPack();
     return (await this.options.client.search(query, pack)).map(describeMod);
@@ -293,7 +367,10 @@ export class PackService {
         for (const dependency of candidates.get(projectId)?.dependencies ?? []) visit(dependency);
       };
       for (const mod of candidates.values()) if (mod.explicit) visit(mod.id);
-      pack.mods = [...candidates.values()].filter((mod) => retained.has(mod.id));
+      const remaining = [...candidates.values()].filter((mod) => retained.has(mod.id));
+      recordRemovedMods(pack, remaining);
+      pack.mods = remaining;
+      pack.requests = pack.requests.map(request => ({ ...request, status: requestIsInstalled(request, pack.mods) ? 'installed' as const : 'pending' as const }));
       reconnectDependencies(pack.mods);
       pack.version = nextVersion(pack.version);
       await this.persist(pack);

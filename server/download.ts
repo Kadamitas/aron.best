@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { open, rename, rm } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { lstat, open, rename, rm } from 'node:fs/promises';
 
 const artifactHosts = new Set(['edge.forgecdn.net', 'media.forgecdn.net', 'mediafilez.forgecdn.net', 'mediafiles.forgecdn.net', 'meta.fabricmc.net']);
 
@@ -45,6 +46,43 @@ export async function downloadArtifact(url: string, destination: string, options
       if (digests[hash.algo] && digests[hash.algo] !== hash.value.toLowerCase()) throw new Error('Download checksum verification failed.');
     }
     if (options.hashes && !options.hashes.some(hash => hash.algo === 1 || hash.algo === 2)) throw new Error('No supported checksum was supplied.');
+    await file.sync();
+    await file.close();
+    await rename(temporary, destination);
+  } catch (error) {
+    await file.close().catch(() => undefined);
+    await rm(temporary, { force: true });
+    throw error;
+  }
+}
+
+/** Copies a mod from the host's CurseForge App profile while re-verifying its size and checksum. Symbolic links are refused. */
+export async function copyVerifiedFile(source: string, destination: string, options: { maximumBytes?: number; hashes?: { algo: number; value: string }[]; expectedBytes?: number } = {}): Promise<void> {
+  const info = await lstat(source);
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error('The local mod must be a regular file.');
+  const maximumBytes = options.maximumBytes ?? 128 * 1024 * 1024;
+  if (info.size > maximumBytes) throw new Error('The local mod exceeds the size limit.');
+  if (options.expectedBytes !== undefined && info.size !== options.expectedBytes) throw new Error('Local mod size does not match CurseForge metadata.');
+  if (options.hashes && !options.hashes.some(hash => hash.algo === 1 || hash.algo === 2)) throw new Error('No supported checksum was supplied.');
+  const temporary = `${destination}.${randomUUID()}.part`;
+  const file = await open(temporary, 'wx', 0o600);
+  const sha1 = createHash('sha1');
+  const md5 = createHash('md5');
+  let bytes = 0;
+  try {
+    for await (const chunk of createReadStream(source)) {
+      const data = chunk as Buffer;
+      bytes += data.byteLength;
+      if (bytes > maximumBytes) throw new Error('The local mod exceeds the size limit.');
+      sha1.update(data); md5.update(data);
+      let offset = 0;
+      while (offset < data.byteLength) offset += (await file.write(data, offset)).bytesWritten;
+    }
+    if (options.expectedBytes !== undefined && bytes !== options.expectedBytes) throw new Error('The local mod changed while it was being copied.');
+    const digests: Record<number, string> = { 1: sha1.digest('hex'), 2: md5.digest('hex') };
+    for (const hash of options.hashes ?? []) {
+      if (digests[hash.algo] && digests[hash.algo] !== hash.value.toLowerCase()) throw new Error('Local mod checksum verification failed.');
+    }
     await file.sync();
     await file.close();
     await rename(temporary, destination);

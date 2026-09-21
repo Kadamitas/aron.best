@@ -8,7 +8,10 @@ import staticFiles from '@fastify/static';
 import { z } from 'zod';
 import { CurseForgeClient } from './curseforge.js';
 import { PackService } from './modpack.js';
-import { MinecraftServer } from './minecraft.js';
+import { MinecraftServer, type MinecraftDependencies } from './minecraft.js';
+import { IpAccess } from './ip-access.js';
+import { MinecraftGateway } from './minecraft-gateway.js';
+import { LocalProfileService, validateProfilePath, type LocalProfileSnapshot } from './local-profile.js';
 
 const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -23,10 +26,12 @@ const environmentSchema = z.object({
   MINECRAFT_MEMORY_MB: z.coerce.number().int().min(1024).max(8192).default(4096),
   MINECRAFT_ADDRESS: z.string().default('mc.aron.best'),
   MINECRAFT_AUTOSTART: z.enum(['true', 'false']).default('false'),
+  MINECRAFT_GATEWAY: z.enum(['true', 'false']).default('false'),
   CURSEFORGE_API_KEY: z.string().optional(),
   CURSEFORGE_UPLOAD_TOKEN: z.string().optional(),
   CURSEFORGE_PROJECT_ID: z.string().optional(),
   CURSEFORGE_EXPORT_PATH: z.string().optional(),
+  CURSEFORGE_PROFILE_PATH: z.string().optional(),
 });
 export type Configuration = z.infer<typeof environmentSchema>;
 export function readConfiguration(environment: NodeJS.ProcessEnv = process.env): Configuration { return environmentSchema.parse(environment); }
@@ -38,9 +43,12 @@ function authorized(request: FastifyRequest, secret: string) {
   return timingSafeEqual(createHash('sha256').update(candidate).digest(), createHash('sha256').update(secret).digest());
 }
 
-export async function createApp(configuration = readConfiguration()) {
+export async function createApp(configuration = readConfiguration(), dependencies: { minecraft?: Partial<MinecraftDependencies> } = {}) {
   const runtimeDirectory = path.resolve(configuration.RUNTIME_DIRECTORY);
   await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
+  const ipAccess = new IpAccess(path.join(runtimeDirectory, 'ip-access.json'));
+  await ipAccess.initialize();
+  const hasAccess = (request: FastifyRequest) => authorized(request, configuration.FRIEND_ACCESS_TOKEN) || ipAccess.allows(request.ip);
   const app = Fastify({
     logger: configuration.NODE_ENV === 'test' ? false : { level: 'info', redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]'] },
     logController: new LogController({ disableRequestLogging: true }),
@@ -60,13 +68,20 @@ export async function createApp(configuration = readConfiguration()) {
     activity.unshift({ id: crypto.randomUUID(), message, timestamp: new Date().toISOString() });
     activity.splice(60);
   };
+  const gateway = configuration.MINECRAFT_GATEWAY === 'true' ? new MinecraftGateway({
+    port: 25565, upstreamPort: 25566,
+    joined: async ip => { await ipAccess.grant(ip, 'minecraft'); record('A player joined Minecraft and their network received workshop access.'); },
+    failure: error => { app.log.error({ message: (error as Error).message }, 'Minecraft gateway access failed'); },
+  }) : undefined;
   const client = new CurseForgeClient({ apiKey: configuration.CURSEFORGE_API_KEY, uploadToken: configuration.CURSEFORGE_UPLOAD_TOKEN });
   const projectId = configuration.CURSEFORGE_PROJECT_ID ? z.coerce.number().int().positive().parse(configuration.CURSEFORGE_PROJECT_ID) : undefined;
+  const localProfile = new LocalProfileService(validateProfilePath(configuration.CURSEFORGE_PROFILE_PATH));
   const pack = new PackService({ statePath: path.join(runtimeDirectory, 'pack.json'), name: 'After Hours', client,
     minecraftVersion: configuration.MINECRAFT_VERSION, loader: 'Fabric', loaderVersion: configuration.FABRIC_LOADER_VERSION,
     publishProjectId: projectId, publishArchivePath: configuration.CURSEFORGE_EXPORT_PATH || undefined });
   const minecraft = new MinecraftServer({ directory: path.join(runtimeDirectory, 'minecraft'), java: configuration.JAVA_PATH,
-    memoryMb: configuration.MINECRAFT_MEMORY_MB, version: configuration.MINECRAFT_VERSION, address: configuration.MINECRAFT_ADDRESS, activity: record });
+    memoryMb: configuration.MINECRAFT_MEMORY_MB, version: configuration.MINECRAFT_VERSION, address: configuration.MINECRAFT_ADDRESS, activity: record,
+    onLog: line => gateway?.observeLog(line), requireOnlineMode: Boolean(gateway) }, dependencies.minecraft);
   await minecraft.initialize();
   let globalWindow = Date.now(); let globalRequests = 0; let jobRunning = false; let packMutationRunning = false;
   async function mutatePack<T>(operation: () => Promise<T>): Promise<T> {
@@ -88,7 +103,7 @@ export async function createApp(configuration = readConfiguration()) {
     if (hostname !== publicHostname && !isLocal) return reply.code(404).send({ error: 'Not found.' });
     reply.header('Cache-Control', 'no-store');
     if (route === '/api/status' || route === '/api/health') return;
-    if (!authorized(request, configuration.FRIEND_ACCESS_TOKEN)) return reply.code(401).send({ error: 'Open your private invitation link to use the workshop controls.' });
+    if (!hasAccess(request)) return reply.code(401).send({ error: 'Redeem an invitation or join the Minecraft server from this network to unlock controls.' });
     if (!['GET', 'HEAD'].includes(request.method)) {
       const origin = request.headers.origin;
       const devOrigins = ['http://localhost:4200', 'http://127.0.0.1:4200', 'http://localhost:3000', 'http://127.0.0.1:3000'];
@@ -104,11 +119,23 @@ export async function createApp(configuration = readConfiguration()) {
     return reply.code(status).send({ error: status === 500 ? 'The operation could not be completed. Check the local service log.' : failure.message });
   });
   app.get('/api/health', async () => ({ ok: true }));
+  app.post('/api/access/redeem', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
+    z.object({}).strict().parse(request.body);
+    if (!authorized(request, configuration.FRIEND_ACCESS_TOKEN)) return reply.code(401).send({ error: 'This invitation is invalid or has been rotated.' });
+    await ipAccess.grant(request.ip, 'invite');
+    return { authorized: true };
+  });
   app.get('/api/status', async request => {
-    const hasAccess = authorized(request, configuration.FRIEND_ACCESS_TOKEN);
-    return { server: minecraft.status(), pack: await pack.getPack(),
-      capabilities: { authorized: hasAccess, curseforgeSearch: client.configured, publish: Boolean(client.publishingConfigured && projectId && configuration.CURSEFORGE_EXPORT_PATH), update: Boolean(client.configured && projectId), server: minecraft.status().state !== 'not-installed' },
-      activity: hasAccess ? activity : [], jobRunning };
+    const permitted = hasAccess(request);
+    const current = await pack.getPack();
+    const server = minecraft.status();
+    // Crash reports list the host's paths and mods, so only friends with access see them.
+    const crash = permitted && server.failure ? await minecraft.latestCrashReport() : null;
+    const relevant = crash && server.failure && Date.parse(crash.createdAt) >= Date.parse(server.failure.at) - 5 * 60_000;
+    const crashLog = relevant ? [`# ${crash.file} (${crash.createdAt})`, ...crash.lines] : permitted && server.failure ? minecraft.logs().slice(-80) : undefined;
+    return { server: { ...server, ...(crashLog ? { crashLog } : {}) }, pack: current, history: current.history, requests: current.requests,
+      capabilities: { authorized: permitted, ipWhitelisted: ipAccess.allows(request.ip), joinAccess: Boolean(gateway), curseforgeSearch: client.configured, localProfile: localProfile.configured, publish: Boolean(client.publishingConfigured && projectId && configuration.CURSEFORGE_EXPORT_PATH), update: Boolean(client.configured && projectId), server: minecraft.status().state !== 'not-installed' },
+      activity: permitted ? activity : [], jobRunning };
   });
   const searchCache = new Map<string, { expires: number; mods: Awaited<ReturnType<PackService['search']>> }>();
   app.get('/api/mods/search', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async request => {
@@ -129,24 +156,55 @@ export async function createApp(configuration = readConfiguration()) {
     const result = await mutatePack(() => pack.remove(id)); record('Removed a mod from the draft.'); return result;
   });
   app.post('/api/pack/export', async () => pack.exportManifest());
+  app.post('/api/pack/requests', { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }, async request => {
+    const { url } = z.object({ url: z.string().trim().min(1).max(2048) }).strict().parse(request.body);
+    const result = await mutatePack(() => pack.requestMod(url));
+    record(result.status === 'installed' ? 'A friend requested a mod that is already installed.' : 'A friend requested a mod link for the host to install through the CurseForge App.');
+    return result;
+  });
+  app.post('/api/pack/import-local', { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async request => {
+    z.object({}).strict().parse(request.body);
+    const snapshot = await localProfile.inspect();
+    const result = await mutatePack(() => pack.importLocalProfile(snapshot.pack));
+    record(`Imported ${snapshot.files.length} mods from the host's CurseForge App profile into the draft.`);
+    return result;
+  });
   app.post('/api/pack/publish', { config: { rateLimit: { max: 3, timeWindow: '1 hour' } } }, async request => {
     const body = z.object({ displayName: z.string().trim().min(1).max(100), changelog: z.string().trim().min(1).max(8000) }).strict().parse(request.body);
     const result = await mutatePack(() => pack.publish(body.displayName, body.changelog)); record('Release submitted to CurseForge for review.'); return result;
   });
   app.get('/api/server/logs', async () => ({ lines: minecraft.logs() }));
   app.post('/api/server/action', { config: { rateLimit: { max: 8, timeWindow: '1 minute' } } }, async (request, reply) => {
-    const { action } = z.object({ action: z.enum(['start', 'stop', 'restart', 'backup', 'update']) }).strict().parse(request.body);
+    const { action } = z.object({ action: z.enum(['start', 'stop', 'restart', 'backup', 'update', 'sync-profile']) }).strict().parse(request.body);
     if (action === 'update' && (!client.configured || !projectId)) return reply.code(409).send({ error: 'A CurseForge API key and published project are required before updating from a release.' });
+    if (action === 'sync-profile' && !localProfile.configured) return reply.code(409).send({ error: 'The host must configure the CurseForge App profile path before syncing.' });
     if (jobRunning) return reply.code(409).send({ error: 'A server operation is already running.' });
     jobRunning = true;
-    record(`Server ${action} requested.`);
+    const label = action === 'sync-profile' ? 'App pack sync' : `Server ${action}`;
+    record(`${label} requested.`);
+    let synced: LocalProfileSnapshot | undefined;
     const resolveDownloads = async () => {
+      if (action === 'sync-profile') {
+        // Every file is inspected before the server is touched and hashed again while it is copied.
+        const snapshot = await localProfile.inspect();
+        const target = await pack.getPack();
+        if (snapshot.pack.name !== target.name || snapshot.pack.minecraftVersion !== target.minecraftVersion
+          || snapshot.pack.loader !== target.loader || snapshot.pack.loaderVersion !== target.loaderVersion) {
+          throw Object.assign(new Error('The CurseForge App profile must match this pack name, Minecraft version, and loader before syncing.'), { statusCode: 409 });
+        }
+        synced = snapshot;
+        record(`Staging ${snapshot.files.length} verified mods from the CurseForge App profile.`);
+        return snapshot.files;
+      }
       if (!projectId) throw Object.assign(new Error('Publish a CurseForge project before using Update latest.'), { statusCode: 409 });
       const release = await pack.resolveLatestRelease();
       record(`Staging published release ${release.version}.`);
       return release.downloads;
     };
-    void minecraft.action(action, resolveDownloads).catch(error => { record(`Server ${action} failed: ${(error as Error).message}`); app.log.error({ message: (error as Error).message }, 'Server operation failed'); }).finally(() => { jobRunning = false; });
+    void minecraft.action(action, resolveDownloads).then(async () => {
+      // The draft only changes after the server accepted the new files and restarted.
+      if (synced) { await mutatePack(() => pack.importLocalProfile(synced!.pack)); record('The draft now matches the synced App profile.'); }
+    }).catch(error => { record(`${label} failed: ${(error as Error).message}`); app.log.error({ message: (error as Error).message }, 'Server operation failed'); }).finally(() => { jobRunning = false; });
     return reply.code(202).send({ accepted: true, action });
   });
   const browserRoot = path.resolve('dist/aron-best/browser');
@@ -156,9 +214,10 @@ export async function createApp(configuration = readConfiguration()) {
     } });
   }
   app.setNotFoundHandler((request, reply) => reply.code(404).send({ error: 'Not found.' }));
-  if (configuration.MINECRAFT_AUTOSTART === 'true') app.addHook('onReady', async () => {
-    void minecraft.action('start').catch(error => record(`Automatic startup failed: ${(error as Error).message}`));
+  app.addHook('onReady', async () => {
+    await gateway?.listen();
+    if (configuration.MINECRAFT_AUTOSTART === 'true') void minecraft.action('start').catch(error => record(`Automatic startup failed: ${(error as Error).message}`));
   });
-  app.addHook('onClose', async () => minecraft.shutdown());
+  app.addHook('onClose', async () => { await minecraft.shutdown(); await gateway?.close(); });
   return app;
 }

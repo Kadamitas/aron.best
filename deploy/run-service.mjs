@@ -42,11 +42,13 @@ const child = spawn(service.binary, service.arguments, {
   shell: false,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
+// Keep the Mac from idle-sleeping (-i, any power source) or sleeping on AC (-s)
+// while the API and its Minecraft child run. Neither flag keeps the display on.
 const sleepAssertion = process.platform === 'darwin' && serviceName === 'api' && child.pid
-  ? spawn('/usr/bin/caffeinate', ['-s', '-w', String(child.pid)], { shell: false, stdio: 'ignore' })
+  ? spawn('/usr/bin/caffeinate', ['-i', '-s', '-w', String(child.pid)], { shell: false, stdio: 'ignore' })
   : undefined;
-sleepAssertion?.once('error', error => log(`Could not prevent AC-powered system sleep: ${error.message}\n`));
-sleepAssertion?.once('exit', code => { if (code) log(`The AC-powered sleep assertion exited with code ${code}.\n`); });
+sleepAssertion?.once('error', error => log(`Could not prevent system sleep: ${error.message}\n`));
+sleepAssertion?.once('exit', code => { if (code) log(`The sleep assertion exited with code ${code}.\n`); });
 child.stdout.on('data', log);
 child.stderr.on('data', log);
 child.once('error', (error) => {

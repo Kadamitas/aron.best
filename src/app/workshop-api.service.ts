@@ -24,6 +24,8 @@ export interface Release {
 }
 
 export interface WorkshopStatus {
+  history: Array<Mod & { removedAt: string }>;
+  requests: Array<{ id: string; url: string; slug: string; submittedAt: string; status: 'pending' | 'installed' }>;
   server: {
     state: string;
     version?: string;
@@ -31,6 +33,8 @@ export interface WorkshopStatus {
     uptimeSeconds?: number;
     lastBackup?: string;
     busy?: boolean;
+    failure?: { at: string; message: string; exitCode?: number | null; recoveredAt?: string } | null;
+    crashLog?: string[];
   };
   pack: {
     name: string;
@@ -46,12 +50,15 @@ export interface WorkshopStatus {
     update: boolean;
     server: boolean;
     authorized: boolean;
+    ipWhitelisted?: boolean;
+    joinAccess?: boolean;
+    localProfile: boolean;
   };
   activity: Array<{ message?: string; action?: string; createdAt?: string; timestamp?: string } | string>;
   jobRunning?: boolean;
 }
 
-export type ServerAction = 'start' | 'stop' | 'restart' | 'backup' | 'update';
+export type ServerAction = 'start' | 'stop' | 'restart' | 'backup' | 'update' | 'sync-profile';
 
 @Injectable({ providedIn: 'root' })
 export class WorkshopApi {
@@ -77,20 +84,21 @@ export class WorkshopApi {
     return this.invitation ? new HttpHeaders({ Authorization: `Bearer ${this.invitation}` }) : new HttpHeaders();
   }
 
-  status(): Promise<WorkshopStatus> {
+  async status(): Promise<WorkshopStatus> {
+    if (this.invitation) {
+      await firstValueFrom(this.http.post('/api/access/redeem', {}, { headers: this.headers }));
+      this.invitation = '';
+      try { sessionStorage.removeItem(this.tokenKey); } catch { /* IP access does not need storage. */ }
+    }
     return firstValueFrom(this.http.get<WorkshopStatus>('/api/status', { headers: this.headers }));
   }
 
-  search(query: string) {
-    return this.http.get<{ mods: Mod[] }>('/api/mods/search', { params: { q: query }, headers: this.headers });
+  requestMod(url: string): Promise<unknown> {
+    return firstValueFrom(this.http.post('/api/pack/requests', { url }, { headers: this.headers }));
   }
 
-  addMod(modId: number): Promise<unknown> {
-    return firstValueFrom(this.http.post('/api/pack/mods', { modId }, { headers: this.headers }));
-  }
-
-  removeMod(modId: number): Promise<unknown> {
-    return firstValueFrom(this.http.delete(`/api/pack/mods/${modId}`, { headers: this.headers }));
+  importLocalProfile(): Promise<unknown> {
+    return firstValueFrom(this.http.post('/api/pack/import-local', {}, { headers: this.headers }));
   }
 
   serverAction(action: ServerAction): Promise<unknown> {

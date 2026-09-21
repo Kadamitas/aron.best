@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { resolve4 } from 'node:dns/promises';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
 import { isAbsolute } from 'node:path';
@@ -19,6 +20,19 @@ export const managedMappings = Object.freeze([
 ]);
 const leaseSeconds = 3600;
 const renewalMilliseconds = 15 * 60 * 1000;
+// After a network drop, keep checking every minute so mappings return as soon as the router is back.
+const retryMilliseconds = 60 * 1000;
+export const publicHostnames = Object.freeze(['aron.best', 'mc.aron.best']);
+
+/** Reports whether public DNS still points at this connection. Residential addresses can change. */
+export async function inspectDns(externalAddress) {
+  const stale = [];
+  for (const hostname of publicHostnames) {
+    const addresses = await resolve4(hostname).catch(() => []);
+    if (!addresses.includes(externalAddress)) stale.push({ hostname, addresses });
+  }
+  return { externalAddress, stale };
+}
 
 function xmlValue(xml, tag) {
   const value = xml.match(new RegExp(`<${tag}\\b[^>]*>\\s*([^<]+?)\\s*</${tag}>`, 'i'))?.[1];
@@ -133,23 +147,30 @@ async function main(settingsPath) {
   const shutdown = new AbortController();
   for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => shutdown.abort());
   let lastSuccessAt = null;
+  let lastDnsWarning = '';
   while (!shutdown.signal.aborted) {
     let state;
+    let wait = renewalMilliseconds;
     try {
       const result = await renewMappings(settings, shutdown.signal);
       lastSuccessAt = new Date().toISOString();
-      state = { status: 'ready', checkedAt: lastSuccessAt, lastSuccessAt, ...result };
+      const dns = result.externalAddress ? await inspectDns(result.externalAddress) : { externalAddress: null, stale: [] };
+      state = { status: 'ready', checkedAt: lastSuccessAt, lastSuccessAt, ...result, dns };
       console.log(`${lastSuccessAt} Renewed three GFiber TCP mappings for ${result.address} with one-hour leases.`);
+      const warning = dns.stale.map(entry => `${entry.hostname} -> ${entry.addresses.join(', ') || 'no answer'}`).join('; ');
+      if (warning && warning !== lastDnsWarning) console.error(`${lastSuccessAt} Public DNS does not point at ${result.externalAddress}: ${warning}. Update the Squarespace records.`);
+      lastDnsWarning = warning;
     } catch (error) {
       if (shutdown.signal.aborted) break;
       const message = error instanceof Error ? error.message : 'Unknown router renewal failure';
       state = { status: 'blocked', checkedAt: new Date().toISOString(), lastSuccessAt, message };
       console.error(`${state.checkedAt} Router renewal blocked: ${message}`);
+      wait = retryMilliseconds;
     }
     const temporary = `${settings.statusPath}.part`;
     await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
     await rename(temporary, settings.statusPath);
-    try { await delay(renewalMilliseconds, undefined, { signal: shutdown.signal }); } catch (error) { if (!shutdown.signal.aborted) throw error; }
+    try { await delay(wait, undefined, { signal: shutdown.signal }); } catch (error) { if (!shutdown.signal.aborted) throw error; }
   }
   console.log('Router renewal stopped. No mappings were deleted; existing leases expire on the router.');
 }

@@ -1,24 +1,36 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { FormControl, ReactiveFormsModule, Validators } from '@angular/forms';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { AbstractControl, FormControl, ReactiveFormsModule, ValidationErrors, Validators } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatTabsModule } from '@angular/material/tabs';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog } from '@angular/material/dialog';
-import { catchError, debounceTime, distinctUntilChanged, firstValueFrom, of, switchMap, tap } from 'rxjs';
+import { firstValueFrom } from 'rxjs';
 import { IconComponent } from './icon.component';
 import { ConfirmDialogComponent, ConfirmDialogData } from './confirm-dialog.component';
 import { Mod, ServerAction, WorkshopApi, WorkshopStatus, errorMessage } from './workshop-api.service';
 
+function curseForgeLink(control: AbstractControl<string>): ValidationErrors | null {
+  const value = control.value.trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    const valid = url.protocol === 'https:'
+      && ['curseforge.com', 'www.curseforge.com'].includes(url.hostname)
+      && !url.username && !url.password
+      && /^\/minecraft\/mc-mods\/[a-z0-9_-]+(?:\/.*)?$/i.test(url.pathname);
+    return valid ? null : { curseForgeLink: true };
+  } catch { return { curseForgeLink: true }; }
+}
+
 @Component({
   selector: 'app-workshop',
-  imports: [DatePipe, DecimalPipe, ReactiveFormsModule, MatButtonModule, MatTabsModule, MatFormFieldModule, MatInputModule, MatProgressSpinnerModule, MatProgressBarModule, MatTooltipModule, IconComponent],
+  imports: [DatePipe, DecimalPipe, ReactiveFormsModule, MatButtonModule, MatTabsModule, MatFormFieldModule, MatInputModule, MatProgressSpinnerModule, MatTooltipModule, IconComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './workshop.component.html',
   styleUrl: './workshop.component.scss',
@@ -34,17 +46,21 @@ export class WorkshopComponent {
   readonly busy = signal('');
   readonly tab = signal(0);
   readonly search = new FormControl('', { nonNullable: true });
-  readonly searchResults = signal<Mod[]>([]);
-  readonly searching = signal(false);
-  readonly searched = signal(false);
-  readonly searchError = signal('');
+  private readonly localQuery = toSignal(this.search.valueChanges, { initialValue: '' });
+  readonly requestUrl = new FormControl('', { nonNullable: true, validators: [Validators.required, Validators.maxLength(2048), curseForgeLink] });
   readonly logs = signal<string[]>([]);
   readonly logsLoaded = signal(false);
   readonly logsError = signal('');
+  readonly showCrashLog = signal(false);
   readonly displayName = new FormControl('', { nonNullable: true, validators: [Validators.required, Validators.maxLength(100)] });
   readonly changelog = new FormControl('', { nonNullable: true, validators: [Validators.required, Validators.maxLength(5000)] });
   readonly mods = computed(() => this.status()?.pack.mods ?? []);
   readonly modIds = computed(() => new Set(this.mods().map(mod => mod.id)));
+  readonly history = computed(() => (this.status()?.history ?? []).filter(mod => !this.modIds().has(mod.id)));
+  readonly filteredMods = computed(() => this.mods().filter(mod => this.matchesLocalQuery(mod)));
+  readonly filteredHistory = computed(() => this.history().filter(mod => this.matchesLocalQuery(mod)));
+  readonly requests = computed(() => this.status()?.requests ?? []);
+  readonly pendingRequests = computed(() => this.requests().filter(request => request.status === 'pending'));
   readonly authorized = computed(() => this.status()?.capabilities.authorized === true);
   readonly serverReady = computed(() => this.status()?.capabilities.server === true && this.authorized());
   readonly serverRunning = computed(() => ['running', 'online'].includes(this.status()?.server.state ?? ''));
@@ -74,23 +90,6 @@ export class WorkshopComponent {
       if (document.visibilityState === 'visible' && !this.busy()) void this.refresh(false);
     }, 15000);
     this.destroyRef.onDestroy(() => clearInterval(timer));
-    this.search.valueChanges.pipe(
-      debounceTime(350),
-      distinctUntilChanged(),
-      tap(() => { this.searchError.set(''); this.searching.set(true); }),
-      switchMap(query => {
-        if (!query.trim()) {
-          this.searched.set(false);
-          return of({ mods: [] as Mod[] });
-        }
-        this.searched.set(true);
-        return this.api.search(query.trim()).pipe(catchError(error => {
-          this.searchError.set(errorMessage(error));
-          return of({ mods: [] as Mod[] });
-        }));
-      }),
-      takeUntilDestroyed(this.destroyRef),
-    ).subscribe(response => { this.searchResults.set(response.mods); this.searching.set(false); });
   }
 
   async refresh(showLoading = true): Promise<void> {
@@ -104,17 +103,20 @@ export class WorkshopComponent {
     } finally { this.loading.set(false); }
   }
 
-  async addMod(mod: Mod): Promise<void> {
-    await this.perform(`add:${mod.id}`, () => this.api.addMod(mod.id), `${mod.name} added to the pack.`);
+  async submitRequest(): Promise<void> {
+    this.requestUrl.markAsTouched();
+    if (this.requestUrl.invalid) return;
+    const submitted = await this.perform('request', () => this.api.requestMod(this.requestUrl.value.trim()), 'Mod request saved. It is pending installation in the CurseForge App.');
+    if (submitted) this.requestUrl.reset();
   }
 
-  async removeMod(mod: Mod): Promise<void> {
+  async importProfile(): Promise<void> {
     const confirmed = await this.confirm({
-      title: `Remove ${mod.name}?`,
-      description: 'This removes the mod from the draft pack. Your published releases and running server remain unchanged until the next release and update.',
-      confirm: 'Remove mod',
+      title: 'Import the CurseForge App profile?',
+      description: 'The draft will match the configured profile on this laptop. Mods no longer in that profile will move to Previously installed. The running server is not changed by importing.',
+      confirm: 'Import profile',
     });
-    if (confirmed) await this.perform(`remove:${mod.id}`, () => this.api.removeMod(mod.id), `${mod.name} removed from the draft.`);
+    if (confirmed) await this.perform('import-profile', () => this.api.importLocalProfile(), 'App profile imported. Sync App pack when you are ready to update the server.');
   }
 
   async act(action: ServerAction): Promise<void> {
@@ -122,10 +124,11 @@ export class WorkshopComponent {
       stop: { title: 'Stop the server?', description: 'Players will be disconnected. The server saves the world as it shuts down.', confirm: 'Stop server' },
       restart: { title: 'Restart the server?', description: 'Players will be disconnected while the server saves and restarts. Let your friends know before continuing.', confirm: 'Restart server' },
       update: { title: 'Update to the latest release?', description: 'The server will stop, back up the world, and install the latest compatible published modpack. Players will need the same modpack version to reconnect.', confirm: 'Back up and update' },
+      'sync-profile': { title: 'Sync the App pack to the server?', description: 'Players will be disconnected. The server will stop, back up the world, apply verified compatible files from the configured CurseForge App profile, and restart. Everyone needs the same pack to reconnect.', confirm: 'Back up and sync' },
     };
     const prompt = prompts[action];
     if (prompt && !await this.confirm(prompt)) return;
-    await this.perform(`server:${action}`, () => this.api.serverAction(action), `Server ${action} requested.`);
+    await this.perform(`server:${action}`, () => this.api.serverAction(action), action === 'sync-profile' ? 'App pack sync requested. Follow its progress in Recent activity.' : `Server ${action} requested.`);
     if (this.logsLoaded()) await this.loadLogs();
   }
 
@@ -172,7 +175,10 @@ export class WorkshopComponent {
     } catch { this.snack.open('Copy the server address shown above.', 'Got it', { duration: 5000 }); }
   }
 
-  setQuery(query: string): void { this.search.setValue(query); }
+  private matchesLocalQuery(mod: Mod): boolean {
+    const query = this.localQuery().trim().toLocaleLowerCase();
+    return !query || `${mod.name} ${mod.summary} ${mod.version ?? ''}`.toLocaleLowerCase().includes(query);
+  }
 
   private async perform(key: string, operation: () => Promise<unknown>, success: string): Promise<boolean> {
     if (this.busy()) return false;

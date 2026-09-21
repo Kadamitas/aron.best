@@ -1,24 +1,29 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { access, cp, lstat, mkdir, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
+import { access, cp, lstat, mkdir, open, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { downloadArtifact } from './download.js';
+import { copyVerifiedFile, downloadArtifact } from './download.js';
 
-export interface ModDownload { modId: number; fileId: number; fileName: string; url: string; hashes: { algo: number; value: string }[]; fileLength: number }
+/** A mod to stage: either a CurseForge CDN download or a verified copy from the host's CurseForge App profile. */
+export interface ModDownload { modId: number; fileId: number; fileName: string; url?: string; localPath?: string; hashes: { algo: number; value: string }[]; fileLength: number }
+export type MaintenanceAction = 'start' | 'stop' | 'restart' | 'backup' | 'update' | 'sync-profile';
+const describeAction = (action: MaintenanceAction) => action === 'sync-profile' ? 'App pack sync' : `Server ${action}`;
 type ServerState = 'not-installed' | 'stopped' | 'starting' | 'running' | 'stopping' | 'updating' | 'failed';
 const backupItems = ['world', 'mods', 'config', 'server.properties', 'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json', 'installed-mods.json'];
 const maximumBackups = 20;
 const reservedDiskBytes = 256n * 1024n ** 2n;
-interface MinecraftDependencies {
+export interface MinecraftDependencies {
   launch: (command: string, arguments_: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => ChildProcessWithoutNullStreams;
   download: typeof downloadArtifact;
+  copy: typeof copyVerifiedFile;
   availableBytes: (directory: string) => Promise<bigint>;
   removeDirectory: (directory: string) => Promise<void>;
 }
 const defaultDependencies: MinecraftDependencies = {
   launch: (command, arguments_, options) => spawn(command, arguments_, { ...options, shell: false, stdio: 'pipe' }),
   download: downloadArtifact,
+  copy: copyVerifiedFile,
   availableBytes: async directory => { const space = await statfs(directory, { bigint: true }); return space.bavail * space.bsize; },
   removeDirectory: directory => rm(directory, { recursive: true, force: true }),
 };
@@ -58,9 +63,11 @@ export class MinecraftServer {
   private busy = false;
   private lastRestartAt = 0;
   private lines: string[] = [];
+  /** The most recent bad exit. It stays visible after a rollback restart so friends can read the crash log. */
+  private failure: { at: string; message: string; exitCode: number | null; recoveredAt?: string } | null = null;
   private shuttingDown = false;
   private readonly dependencies: MinecraftDependencies;
-  constructor(private readonly options: { directory: string; java: string; memoryMb: number; version: string; address: string; activity: (message: string) => void }, dependencies: Partial<MinecraftDependencies> = {}) {
+  constructor(private readonly options: { directory: string; java: string; memoryMb: number; version: string; address: string; activity: (message: string) => void; onLog?: (line: string) => void; requireOnlineMode?: boolean }, dependencies: Partial<MinecraftDependencies> = {}) {
     this.dependencies = { ...defaultDependencies, ...dependencies };
   }
 
@@ -76,11 +83,28 @@ export class MinecraftServer {
       this.lastBackup = Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString() : null;
     }
   }
-  status() { return { state: this.state, version: this.options.version, address: this.options.address, uptimeSeconds: this.startedAt ? Math.floor((Date.now() - this.startedAt) / 1000) : 0, lastBackup: this.lastBackup, busy: this.busy }; }
+  status() { return { state: this.state, version: this.options.version, address: this.options.address, uptimeSeconds: this.startedAt ? Math.floor((Date.now() - this.startedAt) / 1000) : 0, lastBackup: this.lastBackup, busy: this.busy, failure: this.failure }; }
   logs() { return [...this.lines]; }
+  private recordFailure(message: string, exitCode: number | null = null) { this.failure = { at: new Date().toISOString(), message, exitCode }; }
+
+  /** The newest Minecraft crash report, read directly from the server folder and bounded in size. */
+  async latestCrashReport(): Promise<{ file: string; createdAt: string; lines: string[] } | null> {
+    const directory = path.join(this.options.directory, 'crash-reports');
+    const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+    const name = entries.filter(entry => entry.isFile() && /^crash-[\w.-]+\.txt$/.test(entry.name)).map(entry => entry.name).sort().at(-1);
+    if (!name) return null;
+    const file = path.join(directory, name);
+    const info = await lstat(file);
+    if (!info.isFile() || info.isSymbolicLink()) return null;
+    const handle = await open(file, 'r');
+    try {
+      const { bytesRead, buffer } = await handle.read(Buffer.alloc(64 * 1024), 0, 64 * 1024, 0);
+      return { file: name, createdAt: info.mtime.toISOString(), lines: buffer.subarray(0, bytesRead).toString('utf8').split('\n').slice(0, 400) };
+    } finally { await handle.close(); }
+  }
   private log(line: string) { this.lines.push(line.slice(0, 2000)); if (this.lines.length > 250) this.lines.shift(); }
 
-  async action(action: 'start' | 'stop' | 'restart' | 'backup' | 'update', downloads?: () => Promise<ModDownload[]>) {
+  async action(action: MaintenanceAction, downloads?: () => Promise<ModDownload[]>) {
     if (this.shuttingDown) throw Object.assign(new Error('The controller is shutting down.'), { statusCode: 503 });
     if (this.busy) throw Object.assign(new Error('A server operation is already running.'), { statusCode: 409 });
     if (action === 'restart' && Date.now() - this.lastRestartAt < 120_000) throw Object.assign(new Error('Wait two minutes between restarts.'), { statusCode: 429 });
@@ -98,10 +122,10 @@ export class MinecraftServer {
         }
         if (running && !this.shuttingDown) await this.start();
       }
-      if (action === 'update') { if (!downloads) throw new Error('The update source is not configured.'); await this.update(await downloads()); }
-      this.options.activity(`Server ${action} completed.`);
+      if (action === 'update' || action === 'sync-profile') { if (!downloads) throw new Error('The update source is not configured.'); await this.update(await downloads()); }
+      this.options.activity(`${describeAction(action)} completed.`);
     } catch (error) {
-      this.options.activity(`Server ${action} failed: ${error instanceof Error ? error.message : 'Unknown failure'}`);
+      this.options.activity(`${describeAction(action)} failed: ${error instanceof Error ? error.message : 'Unknown failure'}`);
       throw error;
     } finally { this.busy = false; }
   }
@@ -112,6 +136,11 @@ export class MinecraftServer {
     if (this.state === 'not-installed') throw new Error('Run npm run bootstrap to install the Minecraft server.');
     const eula = await readFile(path.join(this.options.directory, 'eula.txt'), 'utf8').catch(() => '');
     if (!/^eula=true\s*$/m.test(eula)) throw new Error('The owner must accept the Minecraft EULA locally before starting the server.');
+    if (this.options.requireOnlineMode) {
+      const properties = await readFile(path.join(this.options.directory, 'server.properties'), 'utf8');
+      if (!/^online-mode=true\s*$/m.test(properties) || !/^server-ip=127\.0\.0\.1\s*$/m.test(properties)
+        || !/^server-port=25566\s*$/m.test(properties)) throw new Error('Join-based access requires online-mode=true and the private game listener at 127.0.0.1:25566.');
+    }
     this.state = 'starting';
     const child = this.dependencies.launch(this.options.java, [`-Xms512M`, `-Xmx${this.options.memoryMb}M`, '-jar', 'fabric-server-launch.jar', 'nogui'], {
       cwd: this.options.directory,
@@ -126,15 +155,24 @@ export class MinecraftServer {
       if (partial.length > 16_384) partial = partial.slice(-16_384);
       for (const line of lines) {
         this.log(line);
-        if (this.process === child && this.state === 'starting' && /Done \([\d.,]+s\)!/.test(line)) { this.state = 'running'; this.startedAt = Date.now(); }
+        this.options.onLog?.(line);
+        if (this.process === child && this.state === 'starting' && /Done \([\d.,]+s\)!/.test(line)) {
+          this.state = 'running'; this.startedAt = Date.now();
+          if (this.failure && !this.failure.recoveredAt) this.failure = { ...this.failure, recoveredAt: new Date().toISOString() };
+        }
       }
     };
     child.stdout.on('data', receive); child.stderr.on('data', receive);
     child.stdin.on('error', error => this.log(`Minecraft input closed: ${error.message}`));
-    child.on('error', error => { this.log(error.message); if (this.process === child) { this.state = 'failed'; this.process = undefined; } });
+    child.on('error', error => { this.log(error.message); if (this.process === child) { this.state = 'failed'; this.recordFailure(`Minecraft could not be launched: ${error.message}`); this.process = undefined; } });
     child.on('exit', code => {
       this.log(`Minecraft exited with code ${code}.`);
-      if (this.process === child) { this.state = this.state === 'stopping' || code === 0 ? 'stopped' : 'failed'; this.process = undefined; this.startedAt = undefined; }
+      if (this.process === child) {
+        const clean = this.state === 'stopping' || code === 0;
+        this.state = clean ? 'stopped' : 'failed';
+        if (!clean) this.recordFailure(this.startedAt ? `Minecraft crashed while running (exit code ${code}).` : `Minecraft stopped during startup (exit code ${code}).`, code);
+        this.process = undefined; this.startedAt = undefined;
+      }
     });
     const deadline = Date.now() + 180_000;
     while (Date.now() < deadline) {
@@ -143,6 +181,8 @@ export class MinecraftServer {
       await delay(500);
     }
     await this.stop();
+    this.state = 'failed';
+    this.recordFailure('Minecraft did not become ready within three minutes and was stopped.');
     throw new Error('Minecraft did not become ready within three minutes.');
   }
 
@@ -220,7 +260,10 @@ export class MinecraftServer {
       for (const file of downloads) {
         if (!/^[A-Za-z0-9_+.() -]+\.jar$/.test(file.fileName) || names.has(file.fileName)) throw new Error('A mod has an unsafe or duplicated filename.');
         names.add(file.fileName);
-        await this.dependencies.download(file.url, path.join(staging, file.fileName), { hashes: file.hashes, expectedBytes: file.fileLength });
+        const destination = path.join(staging, file.fileName);
+        if (file.localPath) await this.dependencies.copy(file.localPath, destination, { hashes: file.hashes, expectedBytes: file.fileLength });
+        else if (file.url) await this.dependencies.download(file.url, destination, { hashes: file.hashes, expectedBytes: file.fileLength });
+        else throw new Error('A mod has neither a download address nor a verified local file.');
       }
       await this.stop();
       backupDirectory = await this.backup();

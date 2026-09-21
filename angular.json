@@ -23,7 +23,7 @@
               "optimization": { "scripts": true, "styles": { "minify": true, "inlineCritical": false }, "fonts": false },
               "budgets": [
                 { "type": "initial", "maximumWarning": "850kB", "maximumError": "1MB" },
-                { "type": "anyComponentStyle", "maximumWarning": "18kB", "maximumError": "25kB" }
+                { "type": "anyComponentStyle", "maximumWarning": "22kB", "maximumError": "28kB" }
               ],
               "outputHashing": "all"
             },
