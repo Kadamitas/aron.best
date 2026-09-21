@@ -74,6 +74,7 @@ const settings = {
   MINECRAFT_BIND_ADDRESS: '0.0.0.0',
   WEB_SUBNET: '172.30.1.0/24',
   CADDY_ADDRESS: '172.30.1.2',
+  APP_ADDRESS: '172.30.1.3',
   ...(environment.CURSEFORGE_PROJECT_ID ? { CURSEFORGE_PROJECT_ID: value('CURSEFORGE_PROJECT_ID', '') } : {}),
 };
 await createFile(path.join(destination, 'compose.env'), Object.entries(settings).map(([key, entry]) => `${key}=${entry}\n`).join(''), 0o600);

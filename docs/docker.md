@@ -14,7 +14,7 @@ From the repository root:
 
 ```sh
 node scripts/docker-prepare.mjs
-COMPOSE_PROJECT_NAME=aron-best-preview WEB_SUBNET=172.30.10.0/24 CADDY_ADDRESS=172.30.10.2 docker compose --env-file .runtime/docker/compose.env up --build -d app minecraft
+COMPOSE_PROJECT_NAME=aron-best-preview WEB_SUBNET=172.30.10.0/24 CADDY_ADDRESS=172.30.10.2 APP_ADDRESS=172.30.10.3 docker compose --env-file .runtime/docker/compose.env up --build -d app minecraft
 node scripts/docker-invite.mjs http://127.0.0.1:3300
 ```
 
@@ -46,7 +46,7 @@ The image versions are configurable with `NODE_IMAGE`, `JAVA_IMAGE`, `JAVA8_IMAG
 | `MINECRAFT_PUBLISHED_PORT` | Loopback preview game port, default `25575` |
 | `MINECRAFT_PUBLIC_PORT` | Public game port, default `25565` |
 | `HTTP_BIND_ADDRESS`, `MINECRAFT_BIND_ADDRESS` | Host addresses for public listeners, default `0.0.0.0` |
-| `WEB_SUBNET`, `CADDY_ADDRESS` | Private web network and the exact trusted Caddy address |
+| `WEB_SUBNET`, `CADDY_ADDRESS`, `APP_ADDRESS` | Private web network and distinct fixed addresses for Caddy and the app |
 | `IP_GRANTS` | Whether a verified Minecraft join or invitation also grants the observed network access |
 | `COMPOSE_PROJECT_NAME` | Namespace for containers, networks and persistent volumes |
 
@@ -64,7 +64,7 @@ The invitation unlocks Basic and Advanced together and installs a signed HttpOnl
 
 On a native Linux host, `IP_GRANTS=true` can retain join-based network access after verifying that the game gateway sees the actual remote player address and that Caddy supplies the actual HTTP client address. Test using two unrelated networks before enabling it. A host-side proxy on Docker Desktop needs an explicit, authenticated source-address handoff before join-based access can be enabled safely; simply trusting arbitrary forwarded headers is insufficient. The private controller port must never be published to make this work.
 
-The app trusts only `CADDY_ADDRESS` for forwarded HTTP headers. If `WEB_SUBNET` conflicts with an existing network, change both settings together and keep Caddy's address inside that subnet. Do not replace it with `true`, an arbitrary hop count or a broad network range.
+The app trusts only `CADDY_ADDRESS` for forwarded HTTP headers. If `WEB_SUBNET` conflicts with an existing network, change all three settings together and keep Caddy and the app at different addresses inside that subnet. Fixed addresses prevent startup order from assigning Caddy's trusted address to the app. Do not replace the trusted address with `true`, an arbitrary hop count or a broad network range.
 
 ## Move the existing server into Docker
 

@@ -56,7 +56,11 @@ services:
     volumes:
       - app-state:/data
     secrets: [friend_access_token, controller_token, curseforge_api_key, curseforge_upload_token]
-    networks: [web, control, app-egress]
+    networks:
+      web:
+        ipv4_address: ${APP_ADDRESS:-172.30.1.3}
+      control: {}
+      app-egress: {}
     depends_on:
       minecraft:
         condition: service_healthy
