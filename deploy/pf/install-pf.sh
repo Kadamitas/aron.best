@@ -23,11 +23,26 @@ if [[ "${1:-}" == "--remove" ]]; then
   launchctl bootout system "$LOAD_PLIST" 2>/dev/null || true
   launchctl bootout system "$EXPIRE_PLIST" 2>/dev/null || true
   rm -f "$LOAD_PLIST" "$EXPIRE_PLIST" "$ANCHOR_FILE"
-  if grep -q "$MARKER" "$PF_CONF"; then
-    /usr/bin/sed -i '' "/$MARKER/,/^load anchor \"$ANCHOR_NAME\"/d" "$PF_CONF"
+  if grep -qF "$MARKER" "$PF_CONF"; then
+    cp "$PF_CONF" "$PF_CONF.aron-best.removed.bak"
+    /usr/bin/python3 - "$PF_CONF" "$MARKER" "$ANCHOR_NAME" <<'PY'
+import sys
+path, marker, anchor = sys.argv[1:4]
+kept, skipping = [], False
+for line in open(path).read().splitlines(True):
+    if line.strip() == marker: skipping = True; continue
+    if skipping and (line.startswith(f'anchor "{anchor}"') or line.startswith(f'load anchor "{anchor}"')): continue
+    skipping = False
+    kept.append(line)
+open(path, "w").write("".join(kept))
+PY
   fi
+  pfctl -F all >/dev/null 2>&1 || true
   pfctl -f "$PF_CONF" >/dev/null 2>&1 || true
-  echo "Removed the aron.best pf anchor. Apple's default rules remain loaded."
+  # Also disable pf entirely: macOS leaves it off by default and two kernel
+  # panics followed this anchor on September 21, 2026.
+  pfctl -d >/dev/null 2>&1 || true
+  echo "Removed the aron.best pf anchor and disabled pf. Apple's default configuration is restored."
   exit 0
 fi
 
