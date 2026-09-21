@@ -531,7 +531,7 @@ export async function createController(configuration = readControllerConfigurati
       manifestType: z.literal('minecraftModpack'), manifestVersion: z.literal(1),
       name: z.string().min(1).max(100), version: z.string().min(1).max(100), author: z.string().max(100).optional(),
       files: z.array(z.object({ projectID: z.number().int().positive(), fileID: z.number().int().positive(), required: z.boolean(), fileName: z.string().min(1).max(255),
-        name: z.string().max(200).optional(), websiteUrl: z.string().url().max(500).optional() }).strict()).max(500), overrides: z.literal('overrides'),
+        name: z.string().max(200).optional(), websiteUrl: z.string().url().max(500).optional(), author: z.string().max(100).optional() }).strict()).max(500), overrides: z.literal('overrides'),
     }).strict() }).strict().parse(request.body);
     const archive = await workspaceOperation(async runtime => {
       const target = runtime.server.status();

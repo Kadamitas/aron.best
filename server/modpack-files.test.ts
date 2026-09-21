@@ -33,7 +33,7 @@ async function upload(files: ModpackFiles, destination: string, contents: string
 const manifest: WorkspaceManifest = {
   minecraft: { version: '26.3', modLoaders: [{ id: 'fabric-0.19.5', primary: true }] },
   manifestType: 'minecraftModpack', manifestVersion: 1, name: 'After Hours', version: 'local-snapshot',
-  files: [{ projectID: 999, fileID: 123, required: true, fileName: 'managed.jar', name: 'Managed Mod', websiteUrl: 'https://www.curseforge.com/minecraft/mc-mods/managed' }], overrides: 'overrides',
+  files: [{ projectID: 999, fileID: 123, required: true, fileName: 'managed.jar', name: 'Managed Mod', websiteUrl: 'https://www.curseforge.com/minecraft/mc-mods/managed', author: 'Some <One>' }], overrides: 'overrides',
 };
 
 async function unzip(bytes: Buffer): Promise<Map<string, Buffer>> {
@@ -593,8 +593,9 @@ test('workspace archives hand installed CurseForge mods to the app by id and onl
   ] }));
   assert.deepEqual([...archive.keys()], ['manifest.json', 'modlist.html', 'overrides/mods/custom.jar']);
   const metadata = JSON.parse(archive.get('manifest.json')!.toString());
-  assert.deepEqual(metadata.files, [{ projectID: 999, fileID: 123, required: true }]);
+  assert.deepEqual(metadata.files, [{ projectID: 999, fileID: 123, required: true, isLocked: false }]);
+  assert.deepEqual(Object.keys(metadata), ['minecraft', 'manifestType', 'manifestVersion', 'name', 'version', 'overrides', 'files']);
   assert.equal(metadata.version, 'local-snapshot');
   assert.equal(archive.get('modlist.html')!.toString(),
-    '<ul>\n<li><a href="https://www.curseforge.com/minecraft/mc-mods/managed">Managed Mod</a></li>\n<li>custom.jar (bundled in overrides)</li>\n</ul>\n');
+    '<ul>\n<li><a href="https://www.curseforge.com/minecraft/mc-mods/managed">Managed Mod (by Some &lt;One&gt;)</a></li>\n<li>custom.jar (bundled in overrides)</li>\n</ul>\n');
 });

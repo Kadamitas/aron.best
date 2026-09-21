@@ -11,7 +11,7 @@ const modSchema = z.object({
   id, name: z.string(), summary: z.string(), logoUrl: z.string().optional(),
   downloadCount: z.number(), websiteUrl: z.string().optional(), fileId: id,
   version: z.string(), explicit: z.boolean(), dependencies: z.array(id),
-  conflicts: z.array(id), requiredBy: z.array(id),
+  conflicts: z.array(id), requiredBy: z.array(id), author: z.string().max(100).optional(),
 });
 export type Mod = Omit<z.infer<typeof modSchema>, 'fileId' | 'version' | 'explicit' | 'dependencies' | 'conflicts' | 'requiredBy'> & {
   fileId?: number; version?: string; explicit?: boolean; dependencies?: number[]; conflicts?: number[]; requiredBy?: number[];
@@ -83,7 +83,8 @@ export function parseInstalledProfile(input: unknown): { pack: Pack; files: Down
     installedAddons: z.array(z.object({
       addonID: id, gameID: z.literal(432), categoryClassID: z.literal(6), name: z.string(),
       isEnabled: z.boolean(), isModified: z.boolean().optional(), isWorkingCopy: z.boolean().optional(),
-      thumbnailUrl: z.string().nullable().optional(), webSiteURL: z.string().nullable().optional(), installedFile: installedFileSchema,
+      thumbnailUrl: z.string().nullable().optional(), webSiteURL: z.string().nullable().optional(), primaryAuthor: z.string().max(100).nullable().optional(),
+      installedFile: installedFileSchema,
     })).max(150),
     modpackOverrides: z.array(z.unknown()).optional(),
   }).safeParse(input);
@@ -115,6 +116,7 @@ export function parseInstalledProfile(input: unknown): { pack: Pack; files: Down
     files.push({ modId: addon.addonID, fileId: file.id, fileName: file.fileName, fileLength: file.fileLength, hashes, url: file.downloadUrl });
     mods.push({ id: addon.addonID, name: addon.name, summary: 'Imported from the local CurseForge profile.', downloadCount: 0,
       ...(addon.thumbnailUrl ? { logoUrl: addon.thumbnailUrl } : {}), ...(addon.webSiteURL ? { websiteUrl: addon.webSiteURL } : {}),
+      ...(addon.primaryAuthor ? { author: addon.primaryAuthor } : {}),
       fileId: file.id, version: file.fileName, explicit: true, requiredBy: [],
       dependencies: dependencies.filter((dependency) => dependency.relationType === 3).map((dependency) => dependency.modId),
       conflicts: dependencies.filter((dependency) => dependency.relationType === 5).map((dependency) => dependency.modId) });
@@ -287,6 +289,34 @@ export class PackService {
       pack.requests.unshift(request);
       await this.persist(pack);
       return structuredClone(request);
+    });
+  }
+
+  /**
+   * Learn CurseForge project and file ids from a CurseForge App profile's minecraftinstance.json.
+   * Nothing is downloaded or removed: mods already in the draft are updated by project id and new
+   * ones are added, so the modpack download can hand them to the App by id instead of bundling JARs.
+   */
+  async learnInstanceMods(input: unknown): Promise<{ pack: Pack; learned: number }> {
+    const { pack: incoming } = parseInstalledProfile(input);
+    return this.serial(async () => {
+      const pack = await this.getPack();
+      if (incoming.minecraftVersion !== pack.minecraftVersion || incoming.loader !== pack.loader) {
+        throw new CurseForgeError('PROFILE_TARGET_MISMATCH', `That profile targets Minecraft ${incoming.minecraftVersion} with ${incoming.loader}. This pack uses Minecraft ${pack.minecraftVersion} with ${pack.loader}.`);
+      }
+      let learned = 0;
+      for (const mod of incoming.mods) {
+        const index = pack.mods.findIndex((existing) => existing.id === mod.id);
+        const existing = pack.mods[index];
+        if (existing && existing.fileId === mod.fileId && existing.version === mod.version && existing.author === mod.author) continue;
+        learned++;
+        if (existing) pack.mods[index] = { ...existing, fileId: mod.fileId, version: mod.version, name: mod.name, ...(mod.author ? { author: mod.author } : {}),
+          ...(mod.websiteUrl ? { websiteUrl: mod.websiteUrl } : {}), ...(mod.logoUrl ? { logoUrl: mod.logoUrl } : {}) };
+        else pack.mods.push({ ...mod, dependencies: [], conflicts: [], requiredBy: [] });
+      }
+      if (pack.mods.length > 150) throw new CurseForgeError('MOD_LIMIT', 'The pack is limited to 150 mods.', 409);
+      if (learned) { reconnectDependencies(pack.mods); await this.persist(pack); }
+      return { pack: structuredClone(pack), learned };
     });
   }
 

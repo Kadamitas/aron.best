@@ -56,6 +56,7 @@ export interface ManagedFile {
   fileName: string;
   name?: string;
   websiteUrl?: string;
+  author?: string;
 }
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
@@ -63,7 +64,10 @@ const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (char) => ({ '&'
 /** The mod list the CurseForge App writes next to its own manifests; harmless elsewhere. */
 function modList(managed: ManagedFile[], bundled: string[]): string {
   const rows = [
-    ...managed.map((file) => `<li>${file.websiteUrl ? `<a href="${escapeHtml(file.websiteUrl)}">${escapeHtml(file.name ?? file.fileName)}</a>` : escapeHtml(file.name ?? file.fileName)}</li>`),
+    ...managed.map((file) => {
+      const label = escapeHtml(`${file.name ?? file.fileName}${file.author ? ` (by ${file.author})` : ''}`);
+      return `<li>${file.websiteUrl ? `<a href="${escapeHtml(file.websiteUrl)}">${label}</a>` : label}</li>`;
+    }),
     ...bundled.map((name) => `<li>${escapeHtml(name)} (bundled in overrides)</li>`),
   ];
   return `<ul>\n${rows.join('\n')}\n</ul>\n`;
@@ -273,7 +277,7 @@ export class ModpackFiles {
       const inventory = everything.filter((item) => !managedPaths.has(item.path));
       const bundled = inventory.filter((item) => /^mods\/[^/]+\.jar$/i.test(item.path)).map((item) => item.path.slice('mods/'.length));
       const metadata = Buffer.from(`${JSON.stringify({ minecraft: manifest.minecraft, manifestType: 'minecraftModpack', manifestVersion: 1, name: manifest.name, version: manifest.version, ...(manifest.author ? { author: manifest.author } : {}),
-        files: managed.map((file) => ({ projectID: file.projectID, fileID: file.fileID, required: file.required })), overrides: 'overrides' }, null, 2)}\n`);
+        overrides: 'overrides', files: managed.map((file) => ({ projectID: file.projectID, fileID: file.fileID, required: file.required, isLocked: false })) }, null, 2)}\n`);
       const list = Buffer.from(modList(managed, bundled));
       if (metadata.length + list.length > 256 * 1024) throw new ModpackFilesError('The modpack archive metadata is too large.', 413);
       const entries: Array<readonly [string, Buffer]> = [['manifest.json', metadata], ['modlist.html', list]];

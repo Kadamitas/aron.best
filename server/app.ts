@@ -244,7 +244,8 @@ export async function createApp(configuration = readConfiguration(), dependencie
     const controller = await remote?.refresh();
     const target = controller?.workspace.server ?? minecraft.status();
     // Mods with known CurseForge ids are listed for the CurseForge App to install and track; only the rest ship as override JARs.
-    const managed = (await pack.getPack()).mods.map((mod) => ({ projectID: mod.id, fileID: mod.fileId, required: true, fileName: mod.version, name: mod.name, ...(mod.websiteUrl ? { websiteUrl: mod.websiteUrl } : {}) }));
+    const managed = (await pack.getPack()).mods.map((mod) => ({ projectID: mod.id, fileID: mod.fileId, required: true, fileName: mod.version, name: mod.name,
+      ...(mod.websiteUrl ? { websiteUrl: mod.websiteUrl } : {}), ...(mod.author ? { author: mod.author } : {}) }));
     const archive = remote ? await remote.workspace.exportArchive({ ...manifest, minecraft: { version: target.version, modLoaders: [{ id: `${target.loader.toLowerCase()}-${target.loaderVersion}`, primary: true }] }, name: configuration.WORKSHOP_NAME, files: managed, version: manifest.version }) : undefined;
     const localArchive = archive ? undefined : await pack.exportArchive();
     return reply
@@ -325,6 +326,12 @@ export async function createApp(configuration = readConfiguration(), dependencie
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     await workspace.cancelUpload(id, request.ip);
     return { cancelled: true };
+  });
+  app.post('/api/pack/import-instance', { bodyLimit: 1_500_000, config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async request => {
+    // The host uploads the CurseForge App profile's minecraftinstance.json so the pack learns project and file ids without an API key.
+    const result = await mutatePack(() => pack.learnInstanceMods(request.body));
+    record(result.learned ? `Learned CurseForge ids for ${result.learned} mods from a CurseForge App profile.` : 'A CurseForge App profile was imported with nothing new to learn.');
+    return result;
   });
   app.post('/api/pack/import-local', { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async request => {
     z.object({}).strict().parse(request.body);

@@ -104,7 +104,7 @@ export class WorkshopComponent {
       'server:backup': 'Saving backup', 'server:update': 'Updating server', 'server:sync-profile': 'Syncing server files',
       'profile:remove': 'Hiding saved server', 'profile:restore': 'Restoring server', 'workspace:select': 'Opening saved server',
       installation: `Installing Minecraft ${this.installation().minecraftVersion} with ${this.installation().loader} ${this.installation().loaderVersion}`,
-      install: 'Adding mods', download: 'Preparing modpack download',
+      install: 'Adding mods', download: 'Preparing modpack download', 'import-instance': 'Reading the CurseForge App profile',
     };
     if (local[this.busy()]) return local[this.busy()]!;
     if (this.busy().startsWith('mod:')) return 'Updating mods';
@@ -507,6 +507,21 @@ export class WorkshopComponent {
       },
     }).afterClosed());
     if (!this.destroyRef.destroyed) await this.refresh(false);
+  }
+
+  /** The host picks a CurseForge App profile's minecraftinstance.json; the pack learns ids so the App can install those mods itself. */
+  async importInstance(input: HTMLInputElement): Promise<void> {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    if (file.size > 1_400_000) { this.snack.open('That file is too large to be a CurseForge App profile.', 'Got it', { duration: 6_000 }); return; }
+    let metadata: unknown;
+    try { metadata = JSON.parse(await file.text()); }
+    catch { this.snack.open('Pick the minecraftinstance.json file from the CurseForge App profile folder.', 'Got it', { duration: 6_000 }); return; }
+    const learned = { count: 0 };
+    await this.perform('import-instance', async () => { learned.count = (await this.api.importInstance(metadata)).learned; },
+      'CurseForge App profile read.');
+    if (learned.count) this.snack.open(`Learned CurseForge ids for ${learned.count} mods. Downloads now hand them to the App by id.`, 'Got it', { duration: 6_000 });
   }
 
   async downloadPack(): Promise<void> {

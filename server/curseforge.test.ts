@@ -215,3 +215,25 @@ test('local profile import derives the exact version and rejects incomplete requ
   profile.installedAddons[0]!.installedFile.dependencies = [{ addonId: 2, type: 3 }];
   assert.throws(() => parseInstalledProfile(profile), { code: 'MISSING_DEPENDENCY' });
 });
+
+test('a CurseForge App profile teaches the draft project and file ids without removing or downloading anything', async () => {
+  const { service } = await setup([file(1)]);
+  await service.add(1);
+  const addon = (addonID: number, name: string, fileId: number, fileName: string, primaryAuthor?: string) => ({
+    addonID, gameID: 432, categoryClassID: 6, name, isEnabled: true, primaryAuthor, webSiteURL: `https://www.curseforge.com/minecraft/mc-mods/${fileName.replace('.jar', '')}`,
+    installedFile: { id: fileId, fileName, fileLength: 10, fileStatus: 4, releaseType: 1, isAvailable: true,
+      downloadUrl: `https://edge.forgecdn.net/files/${fileName}`, gameVersion: ['26.3', 'Fabric'], hashes: [{ type: 1, value: 'a'.repeat(40) }], dependencies: [] },
+  });
+  const profile = { name: 'test4modpack', gameVersion: '26.3', gameTypeID: 432, baseModLoader: { type: 4, forgeVersion: '0.19.5', minecraftVersion: '26.3' },
+    installedAddons: [addon(1, 'Mod one', 11, 'mod-1-newer.jar', 'someone'), addon(7, 'Custom mod', 70, 'custom.jar', 'Kadamitas')] };
+  const result = await service.learnInstanceMods(profile);
+  assert.equal(result.learned, 2);
+  assert.deepEqual(result.pack.mods.map((mod) => [mod.id, mod.fileId, mod.version, mod.author]), [[1, 11, 'mod-1-newer.jar', 'someone'], [7, 70, 'custom.jar', 'Kadamitas']]);
+  assert.equal((await service.learnInstanceMods(profile)).learned, 0);
+  const manifest = await service.exportManifest();
+  assert.deepEqual(manifest.files, [{ projectID: 1, fileID: 11, required: true }, { projectID: 7, fileID: 70, required: true }]);
+  const older = { ...profile, gameVersion: '26.2', baseModLoader: { type: 4, forgeVersion: '0.19.5', minecraftVersion: '26.2' },
+    installedAddons: profile.installedAddons.map((entry) => ({ ...entry, installedFile: { ...entry.installedFile, gameVersion: ['26.2', 'Fabric'] } })) };
+  await assert.rejects(service.learnInstanceMods(older), { code: 'PROFILE_TARGET_MISMATCH' });
+  await assert.rejects(service.learnInstanceMods({ nonsense: true }), { code: 'INVALID_LOCAL_PROFILE' });
+});
