@@ -9,17 +9,23 @@ const idSchema = z.string().uuid();
 const nameSchema = z.string().trim().min(1).max(64).regex(/^[^\x00-\x1f\x7f]+$/);
 const targetSchema = z.object({ minecraftVersion: z.string().regex(/^[0-9][A-Za-z0-9.+-]{0,79}$/), loader: z.enum(['Fabric', 'Forge', 'NeoForge', 'Quilt']), loaderVersion: z.string().regex(/^[0-9][A-Za-z0-9.+-]{0,79}$/) });
 const storedProfileSchema = z.object({ id: idSchema, name: nameSchema, location: z.enum(['legacy', 'managed']) }).strict();
+const deletedProfileSchema = storedProfileSchema.extend({ ...targetSchema.shape, removedAt: z.iso.datetime() }).strict();
+const moveSchema = z.enum(['runtime', 'minecraft', 'backups', 'installation-snapshots']);
 const registrySchema = z.object({ version: z.literal(1), activeId: idSchema, bindingRequired: z.boolean().default(false), profiles: z.array(storedProfileSchema).min(1).max(5) }).strict().superRefine((registry, context) => {
   if (new Set(registry.profiles.map(profile => profile.id)).size !== registry.profiles.length || !registry.profiles.some(profile => profile.id === registry.activeId) || registry.profiles.filter(profile => profile.location === 'legacy').length > 1) context.addIssue({ code: 'custom', message: 'Invalid server profile registry.' });
 });
 const journalSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('create'), profile: storedProfileSchema, phase: z.enum(['provisioning', 'ready']) }).strict(),
-  z.object({ operation: z.literal('delete'), profile: storedProfileSchema, moves: z.array(z.enum(['runtime', 'minecraft', 'backups', 'installation-snapshots'])).min(1).max(3) }).strict(),
+  z.object({ operation: z.literal('delete'), profile: storedProfileSchema, moves: z.array(moveSchema).min(1).max(3) }).strict(),
+  z.object({ operation: z.literal('restore'), profile: storedProfileSchema, moves: z.array(moveSchema).min(1).max(3) }).strict(),
 ]);
 type StoredProfile = z.infer<typeof storedProfileSchema>;
 type Registry = z.infer<typeof registrySchema>;
 type Journal = z.infer<typeof journalSchema>;
+type DeletedProfile = z.infer<typeof deletedProfileSchema>;
+type ProfileMove = z.infer<typeof moveSchema>;
 export interface ServerProfile extends ServerTarget { id: string; name: string }
+export interface DeletedServerProfile extends ServerProfile { removedAt: string }
 export interface ServerProfilesDependencies { rename: typeof rename }
 
 export class ServerProfilesError extends Error {
@@ -40,6 +46,7 @@ export class ServerProfiles {
   private pending: Promise<void> = Promise.resolve();
   private changing = false;
   private readonly descriptions = new Map<string, ServerProfile>();
+  private removedDescriptions: DeletedServerProfile[] = [];
   private readonly fallback: ServerTarget;
   private readonly dependencies: ServerProfilesDependencies;
 
@@ -78,6 +85,7 @@ export class ServerProfiles {
         await this.recover();
         await this.validateRuntime(this.activeDirectory(), false);
         for (const profile of this.state().profiles) this.descriptions.set(profile.id, await this.describe(profile));
+        this.removedDescriptions = await this.readRemovedProfiles();
       } catch (error) { this.registry = undefined; throw error; }
     });
   }
@@ -108,6 +116,63 @@ export class ServerProfiles {
     return { activeId: current.activeId, profiles, limit: 5 };
   }
 
+  async listRemoved(): Promise<DeletedServerProfile[]> {
+    const state = this.state();
+    if (!this.changing) {
+      try {
+        const profiles = await this.readRemovedProfiles();
+        if (this.registry === state && !this.changing) this.removedDescriptions = profiles;
+      } catch (error) { if (!this.changing && this.registry === state) throw error; }
+    }
+    return this.removedDescriptions.map(profile => ({ ...profile }));
+  }
+
+  async recoveryDirectoryFor(id: string): Promise<string> {
+    if (!idSchema.safeParse(id).success) throw new ServerProfilesError('Choose a saved server.', 404);
+    if (this.state().profiles.some(profile => profile.id === id)) {
+      const directory = this.directoryFor(id);
+      await this.validateRuntime(directory, false);
+      return directory;
+    }
+    const profile = await this.readRemovedProfile(id);
+    if (!profile) throw new ServerProfilesError('That deleted server does not exist.', 404);
+    return this.removedDirectory(profile);
+  }
+
+  async restore(id: string): Promise<ServerProfile> {
+    return this.exclusive(async () => {
+      if (!idSchema.safeParse(id).success) throw new ServerProfilesError('Choose a deleted server.', 404);
+      const state = this.state();
+      await this.assertNoJournal();
+      if (state.profiles.some(profile => profile.id === id)) throw new ServerProfilesError('That server is already restored.');
+      if (state.profiles.length >= 5) throw new ServerProfilesError('All five server slots are in use. Delete an inactive server before restoring another.');
+      const removed = await this.readRemovedProfile(id);
+      if (!removed) throw new ServerProfilesError('That deleted server does not exist.', 404);
+      const profile: StoredProfile = { id, name: removed.name, location: removed.location };
+      if (profile.location === 'legacy' && state.profiles.some(candidate => candidate.location === 'legacy')) throw new ServerProfilesError('The original server location is already in use.');
+      await this.assertTree(this.removedDirectory(removed));
+      const moves: ProfileMove[] = profile.location === 'managed' ? ['runtime'] : [];
+      if (profile.location === 'managed') await this.ensureDirectory(this.managedPath());
+      else for (const name of ['minecraft', 'backups', 'installation-snapshots'] as const) if (await inspect(path.join(this.bundlePath(id), name))) moves.push(name);
+      for (const move of moves) if (await inspect(this.moveSource(profile, move))) throw new ServerProfilesError('A recovery destination already exists. Both copies were preserved.', 503);
+      await this.writeJson(this.journalPath(), { operation: 'restore', profile, moves });
+      try {
+        for (const move of moves) await this.moveDirectory(path.join(this.bundlePath(id), move), this.moveSource(profile, move));
+        const description = await this.describe(profile);
+        this.descriptions.set(id, description);
+        await this.save({ ...state, bindingRequired: true, profiles: [...state.profiles, profile] });
+        await this.cleanBundle(id);
+        await this.clearJournal();
+        this.removedDescriptions = this.removedDescriptions.filter(candidate => candidate.id !== id);
+        return description;
+      } catch (error) {
+        await this.reloadAndRecover();
+        if (this.state().profiles.some(candidate => candidate.id === id)) return this.describe(profile);
+        throw error;
+      }
+    });
+  }
+
   async create(name: string, provision: (runtimeDirectory: string) => Promise<void>): Promise<ServerProfile> {
     return this.exclusive(async () => {
       const state = this.state();
@@ -128,7 +193,7 @@ export class ServerProfiles {
         await this.writeJson(this.journalPath(), { ...journal, phase: 'ready' });
         this.descriptions.set(profile.id, description);
         await this.save({ ...state, bindingRequired: true, profiles: [...state.profiles, profile] });
-        await unlink(this.journalPath());
+        await this.clearJournal();
         return description;
       } catch (error) {
         await this.reloadAndRecover();
@@ -179,7 +244,8 @@ export class ServerProfiles {
         await this.writeJson(path.join(bundle, 'profile.json'), { ...description, removedAt: new Date().toISOString(), location: profile.location });
         for (const move of moves) await this.moveDirectory(this.moveSource(profile, move), path.join(bundle, move));
         await this.save({ ...state, profiles: state.profiles.filter(candidate => candidate.id !== id) });
-        await unlink(this.journalPath());
+        await this.clearJournal();
+        this.removedDescriptions = await this.readRemovedProfiles();
       } catch (error) {
         await this.reloadAndRecover();
         if (!this.state().profiles.some(candidate => candidate.id === id)) return;
@@ -195,8 +261,9 @@ export class ServerProfiles {
     if (!result.success) throw new ServerProfilesError('The saved profile operation is invalid. Preserve it and restore from a verified backup.', 503);
     const journal = result.data;
     if (journal.operation === 'create') await this.recoverCreate(journal);
-    else await this.recoverDelete(journal);
-    await unlink(this.journalPath());
+    else if (journal.operation === 'delete') await this.recoverDelete(journal);
+    else await this.recoverRestore(journal);
+    await this.clearJournal();
   }
 
   private async recoverCreate(journal: Extract<Journal, { operation: 'create' }>): Promise<void> {
@@ -266,10 +333,111 @@ export class ServerProfiles {
     }
   }
 
+  private async recoverRestore(journal: Extract<Journal, { operation: 'restore' }>): Promise<void> {
+    const allowed = journal.profile.location === 'managed' ? ['runtime'] : ['minecraft', 'backups', 'installation-snapshots'];
+    if (new Set(journal.moves).size !== journal.moves.length || journal.moves.some(move => !allowed.includes(move)) || !journal.moves.includes(journal.profile.location === 'managed' ? 'runtime' : 'minecraft')) throw new ServerProfilesError('The interrupted restoration has invalid recovery paths.', 503);
+    const state = this.state();
+    const current = state.profiles.find(profile => profile.id === journal.profile.id);
+    if (current && (current.location !== journal.profile.location || current.name !== journal.profile.name) || !current && journal.profile.location === 'legacy' && state.profiles.some(profile => profile.location === 'legacy')) throw new ServerProfilesError('The interrupted restoration conflicts with the server registry.', 503);
+    const bundle = this.bundlePath(journal.profile.id);
+    if (journal.profile.location === 'managed') await this.assertDirectory(this.managedPath());
+    if (await inspect(bundle)) {
+      await this.assertDirectory(this.deletedPath());
+      await this.assertDirectory(bundle);
+      const metadata = await this.readRemovedMetadata(journal.profile.id);
+      if (metadata && (metadata.name !== journal.profile.name || metadata.location !== journal.profile.location)) throw new ServerProfilesError('The interrupted restoration does not match its archived metadata.', 503);
+      if (!metadata && !current) throw new ServerProfilesError('The interrupted restoration is missing its archived metadata.', 503);
+    } else if (!current) throw new ServerProfilesError('The interrupted restoration is missing its archive.', 503);
+    for (const move of [...journal.moves].reverse()) {
+      const source = path.join(bundle, move);
+      const destination = this.moveSource(journal.profile, move);
+      const sourceInfo = await inspect(source);
+      const destinationInfo = await inspect(destination);
+      if (sourceInfo) await this.assertDirectory(source);
+      if (destinationInfo) await this.assertDirectory(destination);
+      if (current) {
+        if (!sourceInfo && destinationInfo) continue;
+      } else {
+        if (sourceInfo && !destinationInfo) continue;
+        if (!sourceInfo && destinationInfo) { await this.moveDirectory(destination, source); continue; }
+      }
+      throw new ServerProfilesError('Server restoration recovery is ambiguous. Both locations were preserved for manual recovery.', 503);
+    }
+    if (current) {
+      await this.validateRuntime(this.directoryFor(current.id), true, current.location === 'legacy');
+      this.descriptions.set(current.id, await this.describe(current));
+      if (await inspect(bundle)) await this.cleanBundle(current.id);
+    }
+  }
+
+  private async readRemovedProfiles(): Promise<DeletedServerProfile[]> {
+    if (!await inspect(this.deletedPath())) return [];
+    await this.assertDirectory(this.deletedPath());
+    const profiles: DeletedServerProfile[] = [];
+    for (const id of await readdir(this.deletedPath())) {
+      if (!idSchema.safeParse(id).success || this.state().profiles.some(profile => profile.id === id)) continue;
+      const profile = await this.readRemovedProfile(id);
+      if (profile) {
+        const { location, ...description } = profile;
+        profiles.push(description);
+      }
+    }
+    return profiles.sort((left, right) => right.removedAt.localeCompare(left.removedAt) || left.name.localeCompare(right.name));
+  }
+
+  private async readRemovedMetadata(id: string): Promise<DeletedProfile | undefined> {
+    const stored = await this.readJson(path.join(this.bundlePath(id), 'profile.json'));
+    if (stored === undefined || stored && typeof stored === 'object' && 'incomplete' in stored && stored.incomplete === true) return undefined;
+    const result = deletedProfileSchema.safeParse(stored);
+    if (!result.success || result.data.id !== id) throw new ServerProfilesError('A deleted server has invalid recovery metadata. Its files were preserved.', 503);
+    return result.data;
+  }
+
+  private async readRemovedProfile(id: string): Promise<DeletedProfile | undefined> {
+    if (!await inspect(this.deletedPath())) return undefined;
+    await this.assertDirectory(this.deletedPath());
+    const bundle = this.bundlePath(id);
+    if (!await inspect(bundle)) return undefined;
+    await this.assertDirectory(bundle);
+    const profile = await this.readRemovedMetadata(id);
+    if (!profile) return undefined;
+    const allowed = profile.location === 'managed' ? ['profile.json', 'runtime'] : ['profile.json', 'minecraft', 'backups', 'installation-snapshots'];
+    if ((await readdir(bundle)).some(name => !allowed.includes(name))) throw new ServerProfilesError('A deleted server has unexpected recovery files. Its files were preserved.', 503);
+    const directory = this.removedDirectory(profile);
+    await this.assertDirectory(directory);
+    await this.assertDirectory(path.join(directory, 'minecraft'));
+    return profile;
+  }
+
+  private removedDirectory(profile: DeletedProfile): string {
+    const bundle = this.bundlePath(profile.id);
+    return profile.location === 'managed' ? path.join(bundle, 'runtime') : bundle;
+  }
+
+  private async cleanBundle(id: string): Promise<void> {
+    await this.assertDirectory(this.deletedPath());
+    const bundle = this.bundlePath(id);
+    await this.assertDirectory(bundle);
+    const entries = await readdir(bundle);
+    if (entries.some(name => name !== 'profile.json')) throw new ServerProfilesError('Unexpected recovery files were preserved. Resolve the interrupted restoration before continuing.', 503);
+    if (entries.includes('profile.json')) {
+      regular(await lstat(path.join(bundle, 'profile.json')));
+      await unlink(path.join(bundle, 'profile.json'));
+    }
+    await rmdir(bundle);
+    await this.syncDirectory(this.deletedPath());
+  }
+
+  private async clearJournal(): Promise<void> {
+    await unlink(this.journalPath());
+    await this.syncDirectory(this.root);
+  }
+
   private async reloadAndRecover(): Promise<void> {
     try {
       this.registry = this.parseRegistry(await this.readJson(this.registryPath()));
       await this.recover();
+      this.removedDescriptions = await this.readRemovedProfiles();
     } catch (error) {
       this.registry = undefined;
       throw new ServerProfilesError(`The profile operation needs recovery before continuing: ${(error as Error).message}`, 503);

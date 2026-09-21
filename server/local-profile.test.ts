@@ -11,6 +11,7 @@ import { CurseForgeClient } from './curseforge.js';
 import { copyVerifiedFile } from './download.js';
 import { LocalProfileService, validateProfilePath } from './local-profile.js';
 import { PackService } from './modpack.js';
+import { BackupObjects, validateBackupObjectManifest } from './backup-objects.js';
 
 const folders: string[] = [];
 afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }); });
@@ -219,7 +220,14 @@ test('friends request links, the host imports the App profile, and sync only com
     assert.ok(synced.activity.some((entry: { message: string }) => entry.message.includes('App pack sync completed')));
     const backups = await readdir(path.join(site.runtime, 'backups'));
     assert.equal(backups.length, 1);
-    assert.equal(await readFile(path.join(site.runtime, 'backups', backups[0]!, 'mods', 'old.jar'), 'utf8'), 'old');
+    const metadata = JSON.parse(await readFile(path.join(site.runtime, 'backups', backups[0]!, 'backup.json'), 'utf8'));
+    assert.equal(metadata.format, 2);
+    const manifest = validateBackupObjectManifest({ files: metadata.files, directories: metadata.directories, snapshotBytes: metadata.snapshotBytes });
+    const original = manifest.files.find(file => file.path === 'mods/old.jar');
+    assert.ok(original);
+    assert.equal(original.sha256, createHash('sha256').update('old').digest('hex'));
+    const object = await new BackupObjects(path.join(site.runtime, 'backup-objects')).openObject(original.sha256, original.size);
+    try { assert.equal(await object.readFile('utf8'), 'old'); } finally { await object.close(); }
     const persisted = JSON.parse(await readFile(path.join(site.runtime, 'pack.json'), 'utf8'));
     assert.equal(persisted.version, '0.3.1');
   } finally { await site.app.close(); }

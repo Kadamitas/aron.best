@@ -1,0 +1,36 @@
+<div class="dialog-heading"><h2 mat-dialog-title>Recovery</h2><button mat-icon-button (click)="load()" [disabled]="busy()" aria-label="Refresh recovery"><app-icon name="refresh"/></button></div>
+<mat-dialog-content>
+  <p class="intro">Backups and deleted servers are kept outside the Advanced file browser. Deleting a server only hides it until you restore it.</p>
+  @if (loading()) { <div class="progress" role="status"><mat-spinner diameter="20"/><span>Loading recovery storage...</span></div> }
+  @if (error()) { <div class="notice error" role="alert"><span>{{ error() }}</span><button mat-button (click)="load()" [disabled]="busy()">Try again</button></div> }
+  @if (restored()) { <div class="notice success" role="status"><app-icon name="check"/><span>{{ restored() }}</span></div> }
+  @if (recovery(); as current) {
+    @if (current.automatic.enabled) {
+      <div class="automatic"><app-icon name="shield"/><p>Every {{ current.automatic.intervalHours }} hours when idle, plus a safety snapshot before editing a stopped server. Edits within 15 minutes share a snapshot. The latest {{ current.automatic.retained }} backups per server are kept, including manual backups. Unchanged files share storage. Deleted servers remain recoverable.</p></div>
+    } @else { <p class="notice">Automatic backups are not enabled on this host.</p> }
+    @if (current.automatic.error) { <div class="notice error" role="alert"><div><strong>Automatic backups need attention.</strong><span>{{ current.automatic.error }}</span></div></div> }
+    <section aria-labelledby="recovery-backups-heading">
+      <div class="section-heading"><h3 id="recovery-backups-heading">Backups</h3><span>Chicago time</span></div>
+      <mat-form-field appearance="outline" subscriptSizing="dynamic"><mat-label>Server</mat-label><mat-select [value]="selectedId()" (selectionChange)="selectedId.set($event.value)" [disabled]="busy() || !current.servers.length">
+        @for (server of current.servers; track server.id) { <mat-option [value]="server.id">{{ server.name }}{{ server.deleted ? ' (deleted)' : '' }}</mat-option> }
+      </mat-select></mat-form-field>
+      @if (selectedServer()?.deleted) { <p class="detail">This server is deleted. Its backups are still available to download.</p> }
+      <div class="backup-list" tabindex="0" aria-label="Retained backups">
+        @for (backup of backups(); track backup.id) {
+          <article class="backup-row"><app-icon name="backup"/><div class="row-copy"><time [attr.datetime]="backup.createdAt">{{ chicagoTime(backup.createdAt) }}</time><span>{{ backup.kind === 'automatic' ? 'Automatic' : 'Manual' }} · {{ backupSize(backup) }}</span></div><a mat-stroked-button [href]="backupUrl(backup)" download [attr.aria-label]="'Download backup from ' + chicagoTime(backup.createdAt)"><app-icon matButtonIcon name="download"/>Download</a></article>
+        } @empty { <p class="empty">No backups yet{{ selectedServer() ? ' for this server' : '' }}.</p> }
+      </div>
+      <p class="detail">Download a copy to protect it if the hosting computer or its storage fails.</p>
+    </section>
+    <section aria-labelledby="recovery-deleted-heading">
+      <div class="section-heading"><h3 id="recovery-deleted-heading">Deleted servers</h3><span>Recoverable</span></div>
+      @if (full() && deletedServers().length) { <p class="notice">All saved server slots are in use. Delete an inactive server to make room before restoring one.</p> }
+      <div class="deleted-list">
+        @for (server of deletedServers(); track server.id) {
+          <article class="deleted-row"><app-icon name="server"/><div class="row-copy"><strong>{{ server.name }}</strong><span>Minecraft {{ server.minecraftVersion }} · {{ server.loader }}</span><span>Deleted {{ chicagoTime(server.removedAt) }}</span></div><button mat-stroked-button (click)="restore(server)" [disabled]="busy() || full() || !!error()" [attr.aria-label]="'Restore ' + server.name">@if (restoring() === server.id) { <mat-spinner diameter="16"/> }{{ restoring() === server.id ? 'Restoring...' : 'Restore' }}</button></article>
+        } @empty { <p class="empty">No deleted servers. Nothing to recover here.</p> }
+      </div>
+    </section>
+  }
+</mat-dialog-content>
+<mat-dialog-actions align="end"><button mat-button (click)="dialog.close()" [disabled]="!!restoring() || confirming()">Done</button></mat-dialog-actions>

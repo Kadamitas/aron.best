@@ -4,6 +4,8 @@ Dictionary Minecraft Server has Basic, Advanced, and Server Log tabs with one in
 
 The active server shows its player count. Hover, focus, or tap that count to see player names, one per line. Player information comes from the private Minecraft status listener and is cached briefly. If the server hides names or returns only a sample, the interface says which names are unavailable instead of inventing a complete list.
 
+Maintenance displays the actual operation instead of repeated generic busy labels. Switching shows the destination's name, such as `Switching to Main server`. Other labels identify starting, shutting down, restarting, installation, backups and file changes. The controller supplies these labels, so another friend's browser or a page reload sees the same operation.
+
 Last updated belongs to the server currently selected for editing. Successful mod and file changes update a persisted timestamp; page refreshes and backups do not. Dates use `America/Chicago`, including the correct CST or CDT offset throughout the year.
 
 ## Basic
@@ -20,13 +22,21 @@ Back up opens a confirmation with the option to download the completed `.tar.gz`
 
 For a consistent world snapshot, a running server stops safely, saves its backup, and starts again. The interface shows progress and an explicit failure if preparation fails. Downloads refer to the completed backup job, not a later active server or a changing world directory. Downloads use the same invitation access as the rest of the workspace. Treat a full backup as private server data, not a modpack for players.
 
+Automatic backups run every six hours per saved server. A running server is backed up only after a fresh player-count check reports zero players; occupied servers and unknown counts defer until a later check. Before changing files or versions on a stopped server, a safety snapshot is saved unless a successful snapshot already exists from the previous 15 minutes. Edits in that window share the same checkpoint. Live additions of new mod files do not stop players to take a checkpoint. A failed required checkpoint blocks the edit and shows a backup warning.
+
+Keep the latest six successful snapshots per server, counting manual and automatic backups together. A new snapshot is committed before old snapshots are retired. Unsafe or unrecognized recovery data is preserved for inspection rather than deleted. Recovery, next to the saved-server selector, lists retained backups and lets friends download them even after a browser restart or server deletion. Backup timestamps use Chicago time. The history and shared objects are outside Advanced and outside the JVM's allowed paths.
+
+Snapshots use manifests referencing immutable SHA-256 objects in `/data/backup-objects`. Identical file contents across server slots and backup dates use one stored object, regardless of filename. Captures verify existing objects before reuse. Downloads reconstruct a normal `.tar.gz` archive and discard their temporary archive file after opening the download, so stored backups do not accumulate duplicate compressed copies. Garbage collection verifies references from active and deleted servers before removing unreferenced objects. Unknown or damaged metadata stops cleanup and preserves existing objects.
+
+This storage deduplicates backups, not Minecraft's live writable worlds or installation snapshots. Everything is still on the same laptop's Docker volume, so it does not protect against losing that disk. Download an important backup or export the Docker state to another device for independent protection.
+
 ## Saved servers
 
 Keep up to five named servers and select one to run at the shared Minecraft address. Each server retains its own world, mods, configuration, Minecraft/loader installation, backups, and installation snapshots. Only one Minecraft process runs at a time.
 
 New server prompts for a name and confirmation. It stops the current server, provisions a blank server with the current Minecraft release and loader family using its latest compatible build, and selects it without starting it. Existing saved servers are not cleared. Install the desired pack files and adjust versions in the new slot. Preset pack names do not automatically download third-party packs.
 
-Selecting a saved server only opens its mods, files, and version settings for editing. It does not stop or switch the active server. Set active is a separate button with confirmation: it stops the current server cleanly and activates the chosen slot without starting it. The server strip identifies the active server independently of the editing selection. Rename also requires confirmation. Delete is available only for inactive servers and asks for confirmation. It removes the slot from the saved list and retains all files under `/data/deleted-server-profiles/<id>` in the Minecraft volume. At least one saved server remains. Recovery data is never automatically purged and still occupies disk space.
+Selecting a saved server only opens its mods, files, and version settings for editing. It does not stop or switch the active server. Set active is a separate button with confirmation: it stops the current server cleanly and activates the chosen slot without starting it. The server strip identifies the active server independently of the editing selection. Rename also requires confirmation. Delete is available only for inactive servers and asks for confirmation. It hides the slot from the saved list and retains all files under `/data/deleted-server-profiles/<id>` in the Minecraft volume. Recovery can restore it, with confirmation, when a slot is available. Restoration keeps its original ID and data paths, does not switch the active server and does not start the restored server. At least one saved server remains. Deleted servers are never automatically purged and still occupy disk space.
 
 New slot data lives under `/data/server-profiles/<id>` and the active selection is stored in `/data/server-profiles.json`. The original server keeps its existing `/data/minecraft` directory until explicitly deleted. Container state exports preserve the whole volume, including every slot, registry, and recovery bundle.
 
@@ -66,6 +76,8 @@ The fixture-based browser checks use temporary ports and do not contact a live s
 npm run build
 node scripts/saved-servers-ui-smoke.mjs dist/aron-best/browser
 node scripts/live-workshop-ui-smoke.mjs dist/aron-best/browser
+node scripts/recovery-ui-smoke.mjs dist/aron-best/browser
+node scripts/operation-status-ui-smoke.mjs dist/aron-best/browser
 node scripts/version-selector-ui-smoke.mjs dist/aron-best/browser
 ```
 

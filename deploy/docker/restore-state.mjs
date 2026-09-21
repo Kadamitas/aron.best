@@ -34,12 +34,12 @@ function inspectName(name) {
   }
 }
 
-async function restrictPermissions(directory) {
+async function restrictPermissions(directory, root = directory) {
   await chmod(directory, 0o700);
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const filename = path.join(directory, entry.name);
-    if (entry.isDirectory()) await restrictPermissions(filename);
-    else if (entry.isFile()) await chmod(filename, 0o600);
+    if (entry.isDirectory()) await restrictPermissions(filename, root);
+    else if (entry.isFile()) await chmod(filename, /^backup-objects\/([a-f0-9]{2})\/\1[a-f0-9]{62}$/.test(path.relative(root, filename)) ? 0o400 : 0o600);
     else throw new Error('The extracted backup contains a non-regular file.');
   }
 }

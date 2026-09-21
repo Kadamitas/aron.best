@@ -13,6 +13,19 @@ const json = async (file: string, value: unknown) => writeFile(file, JSON.string
 const readJson = async (file: string) => JSON.parse(await readFile(file, 'utf8'));
 const absent = async (file: string) => assert.rejects(access(file), { code: 'ENOENT' });
 
+async function deletedFixture(t: TestContext, location: 'legacy' | 'managed', dependencies: Partial<ServerProfilesDependencies> = {}) {
+  const setup = await fixture(t, dependencies);
+  const original = setup.profiles.activeId();
+  const created = await setup.profiles.create('Saved world', directory => provision(directory, alternate));
+  const id = location === 'legacy' ? original : created.id;
+  if (location === 'legacy') await setup.profiles.select(created.id);
+  const directory = setup.profiles.directoryFor(id);
+  const stored = (await readJson(setup.registry)).profiles.find((profile: { id: string }) => profile.id === id);
+  await writeFile(path.join(directory, 'backups', 'saved.zip'), 'preserved backup');
+  await setup.profiles.remove(id);
+  return { ...setup, id, directory, stored, bundle: path.join(setup.root, 'deleted-server-profiles', id) };
+}
+
 async function provision(directory: string, requested = target): Promise<void> {
   const minecraft = path.join(directory, 'minecraft');
   for (const name of ['world', 'mods', 'config']) await mkdir(path.join(minecraft, name), { recursive: true });
@@ -370,4 +383,286 @@ test('untrusted recovery paths are rejected before touching any runtime director
     await access(path.join(setup.profiles.directoryFor(created.id), 'minecraft', 'world', 'level.dat'));
     await access(setup.journal);
   }
+});
+
+for (const location of ['legacy', 'managed'] as const) {
+  test(`${location} deleted servers list and restore the original id and path without switching the active server`, async t => {
+    const setup = await deletedFixture(t, location);
+    const activeId = setup.profiles.activeId();
+    const removed = await setup.profiles.listRemoved();
+    assert.equal(removed.length, 1);
+    assert.equal(removed[0]!.id, setup.id);
+    assert.equal(removed[0]!.name, setup.stored.name);
+    assert.equal(removed[0]!.minecraftVersion, location === 'legacy' ? target.minecraftVersion : alternate.minecraftVersion);
+    assert(Number.isFinite(Date.parse(removed[0]!.removedAt)));
+    assert(!('location' in removed[0]!));
+    const recoveredDirectory = await setup.profiles.recoveryDirectoryFor(setup.id);
+    assert.equal(recoveredDirectory, location === 'legacy' ? setup.bundle : path.join(setup.bundle, 'runtime'));
+    assert.equal(await readFile(path.join(recoveredDirectory, 'backups', 'saved.zip'), 'utf8'), 'preserved backup');
+    const restarted = new ServerProfiles(setup.options);
+    await restarted.initialize();
+    assert.deepEqual(await restarted.listRemoved(), removed);
+    const restored = await restarted.restore(setup.id);
+    assert.equal(restored.id, setup.id);
+    assert.equal(restarted.activeId(), activeId);
+    assert.equal(restarted.directoryFor(setup.id), setup.directory);
+    assert.equal(await restarted.recoveryDirectoryFor(setup.id), setup.directory);
+    assert.equal(await readFile(path.join(setup.directory, 'backups', 'saved.zip'), 'utf8'), 'preserved backup');
+    assert.equal(await readFile(path.join(setup.root, 'controller-token.txt'), 'utf8'), 'untouched control data');
+    assert.deepEqual(await restarted.listRemoved(), []);
+    await absent(setup.bundle);
+    await absent(setup.journal);
+    const persisted = new ServerProfiles(setup.options);
+    await persisted.initialize();
+    assert.equal(persisted.activeId(), activeId);
+    assert.equal(persisted.directoryFor(setup.id), setup.directory);
+    await persisted.remove(setup.id);
+    assert.equal((await persisted.listRemoved())[0]!.id, setup.id);
+  });
+}
+
+test('incomplete creations remain preserved but cannot be listed or restored as deleted servers', async t => {
+  const setup = await fixture(t);
+  let id = '';
+  await assert.rejects(setup.profiles.create('Incomplete', async directory => {
+    id = path.basename(directory);
+    await writeFile(path.join(directory, 'partial.jar'), 'partial data');
+    throw new Error('Interrupted download');
+  }), /Interrupted download/);
+  assert.deepEqual(await setup.profiles.listRemoved(), []);
+  await assert.rejects(setup.profiles.restore(id), /does not exist/);
+  await assert.rejects(setup.profiles.recoveryDirectoryFor(id), /does not exist/);
+  assert.equal(await readFile(path.join(setup.root, 'deleted-server-profiles', id, 'runtime', 'partial.jar'), 'utf8'), 'partial data');
+});
+
+test('restoration enforces the five-slot limit and serialized concurrent restores cannot exceed it', async t => {
+  const setup = await deletedFixture(t, 'managed');
+  const second = await setup.profiles.create('Another archived world', provision);
+  await setup.profiles.remove(second.id);
+  for (let index = 0; index < 3; index++) await setup.profiles.create(`World ${index}`, provision);
+  const attempts = await Promise.allSettled([setup.profiles.restore(setup.id), setup.profiles.restore(second.id)]);
+  assert.equal(attempts.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(attempts.filter(result => result.status === 'rejected').length, 1);
+  assert.equal((await setup.profiles.list()).profiles.length, 5);
+  const remaining = (await setup.profiles.listRemoved())[0]!;
+  await assert.rejects(setup.profiles.restore(remaining.id), /five server slots/);
+  await access(path.join(await setup.profiles.recoveryDirectoryFor(remaining.id), 'minecraft', 'world', 'level.dat'));
+  await absent(setup.journal);
+});
+
+test('recovery identifiers cannot be filesystem paths and active profiles cannot be restored twice', async t => {
+  const setup = await deletedFixture(t, 'managed');
+  for (const id of ['../minecraft', '/tmp/escape', '', randomUUID()]) {
+    await assert.rejects(setup.profiles.restore(id), /Choose a deleted server|does not exist/);
+    await assert.rejects(setup.profiles.recoveryDirectoryFor(id), /Choose a saved server|does not exist/);
+  }
+  await assert.rejects(setup.profiles.restore(setup.profiles.activeId()), /already restored/);
+  await setup.profiles.restore(setup.id);
+  await assert.rejects(setup.profiles.restore(setup.id), /already restored/);
+  assert.equal((await setup.profiles.list()).profiles.length, 2);
+});
+
+test('deleted profile metadata cannot change ids, select paths, add unknown fields, or use linked files', async t => {
+  const setup = await deletedFixture(t, 'managed');
+  const metadataPath = path.join(setup.bundle, 'profile.json');
+  const metadata = await readJson(metadataPath);
+  for (const invalid of [{ ...metadata, id: randomUUID() }, { ...metadata, location: '../../outside' }, { ...metadata, directory: setup.root }, { ...metadata, removedAt: 'yesterday' }]) {
+    await json(metadataPath, invalid);
+    await assert.rejects(setup.profiles.listRemoved(), /invalid recovery metadata/);
+    await assert.rejects(setup.profiles.restore(setup.id), /invalid recovery metadata/);
+    await assert.rejects(setup.profiles.recoveryDirectoryFor(setup.id), /invalid recovery metadata/);
+    await absent(setup.directory);
+  }
+  await rm(metadataPath);
+  await symlink(path.join(setup.root, 'controller-token.txt'), metadataPath);
+  await assert.rejects(setup.profiles.restore(setup.id), /symbolic links or hard links/);
+  await rm(metadataPath);
+  const outsideMetadata = path.join(setup.root, 'archived-metadata.json');
+  await json(outsideMetadata, metadata);
+  await link(outsideMetadata, metadataPath);
+  await assert.rejects(setup.profiles.listRemoved(), /symbolic links or hard links/);
+  assert.equal(await readFile(path.join(setup.root, 'controller-token.txt'), 'utf8'), 'untouched control data');
+});
+
+test('restoration rejects linked roots and nested links without losing archived data', async t => {
+  const setup = await deletedFixture(t, 'managed');
+  const runtime = path.join(setup.bundle, 'runtime');
+  await rename(runtime, path.join(setup.root, 'archived-runtime'));
+  await symlink(path.join(setup.root, 'archived-runtime'), runtime);
+  await assert.rejects(setup.profiles.listRemoved(), /regular directory/);
+  await assert.rejects(setup.profiles.recoveryDirectoryFor(setup.id), /regular directory/);
+  await assert.rejects(setup.profiles.restore(setup.id), /regular directory/);
+  await rm(runtime);
+  await rename(path.join(setup.root, 'archived-runtime'), runtime);
+  const nested = path.join(runtime, 'minecraft', 'config', 'outside');
+  await symlink(setup.root, nested);
+  await assert.rejects(setup.profiles.restore(setup.id), /symbolic links or hard links/);
+  await rm(nested);
+  await link(path.join(setup.root, 'controller-token.txt'), nested);
+  await assert.rejects(setup.profiles.restore(setup.id), /symbolic links or hard links/);
+  await absent(setup.journal);
+  await access(path.join(runtime, 'minecraft', 'world', 'level.dat'));
+});
+
+test('existing restoration destinations are never overwritten', async t => {
+  const setup = await deletedFixture(t, 'managed');
+  await provision(setup.directory);
+  await assert.rejects(setup.profiles.restore(setup.id), /destination already exists/);
+  assert.equal(await readFile(path.join(setup.directory, 'minecraft', 'world', 'level.dat'), 'utf8'), target.minecraftVersion);
+  assert.equal(await readFile(path.join(setup.bundle, 'runtime', 'minecraft', 'world', 'level.dat'), 'utf8'), alternate.minecraftVersion);
+  await absent(setup.journal);
+});
+
+test('failed legacy restoration rolls back earlier moves into the deleted archive', async t => {
+  let fail = false;
+  const setup = await deletedFixture(t, 'legacy', { rename: async (source, destination) => {
+    if (fail && path.basename(String(source)) === 'backups') { fail = false; throw new Error('Synthetic restoration failure'); }
+    return rename(source, destination);
+  } });
+  const activeId = setup.profiles.activeId();
+  fail = true;
+  await assert.rejects(setup.profiles.restore(setup.id), /Synthetic restoration failure/);
+  assert.equal(setup.profiles.activeId(), activeId);
+  assert.equal((await setup.profiles.list()).profiles.length, 1);
+  for (const name of ['minecraft', 'backups', 'installation-snapshots']) { await absent(path.join(setup.root, name)); await access(path.join(setup.bundle, name)); }
+  await absent(setup.journal);
+  await setup.profiles.restore(setup.id);
+  assert.equal((await setup.profiles.list()).profiles.length, 2);
+});
+
+test('a failed restoration registry commit returns files to the archive and allows a later retry', async t => {
+  let fail = false;
+  const setup = await deletedFixture(t, 'managed', { rename: async (source, destination) => {
+    if (fail && path.basename(String(destination)) === 'server-profiles.json') { fail = false; throw new Error('Synthetic restoration registry failure'); }
+    return rename(source, destination);
+  } });
+  fail = true;
+  await assert.rejects(setup.profiles.restore(setup.id), /Synthetic restoration registry failure/);
+  await absent(setup.directory);
+  assert.equal((await setup.profiles.listRemoved())[0]!.id, setup.id);
+  await access(path.join(setup.bundle, 'runtime', 'minecraft', 'world', 'level.dat'));
+  await absent(setup.journal);
+  const restarted = new ServerProfiles(setup.options);
+  await restarted.initialize();
+  await restarted.restore(setup.id);
+  assert.equal(restarted.directoryFor(setup.id), setup.directory);
+});
+
+for (const location of ['legacy', 'managed'] as const) {
+  test(`restart rolls back interrupted ${location} restorations before their registry commit`, async t => {
+    const setup = await deletedFixture(t, location);
+    const moves = location === 'legacy' ? ['minecraft', 'backups', 'installation-snapshots'] : ['runtime'];
+    await json(setup.journal, { operation: 'restore', profile: setup.stored, moves });
+    const first = moves[0]!;
+    await rename(path.join(setup.bundle, first), location === 'legacy' ? path.join(setup.root, first) : setup.directory);
+    const restarted = new ServerProfiles(setup.options);
+    await restarted.initialize();
+    assert.equal((await restarted.list()).profiles.length, 1);
+    assert.equal((await restarted.listRemoved())[0]!.id, setup.id);
+    await access(path.join(await restarted.recoveryDirectoryFor(setup.id), 'backups', 'saved.zip'));
+    await absent(setup.journal);
+    await restarted.restore(setup.id);
+    assert.equal(restarted.directoryFor(setup.id), setup.directory);
+  });
+
+  test(`restart completes committed ${location} restorations without changing active selection`, async t => {
+    const setup = await deletedFixture(t, location);
+    const activeId = setup.profiles.activeId();
+    const moves = location === 'legacy' ? ['minecraft', 'backups', 'installation-snapshots'] : ['runtime'];
+    await json(setup.journal, { operation: 'restore', profile: setup.stored, moves });
+    for (const move of moves) await rename(path.join(setup.bundle, move), location === 'legacy' ? path.join(setup.root, move) : setup.directory);
+    const registry = await readJson(setup.registry);
+    registry.profiles.push(setup.stored);
+    await json(setup.registry, registry);
+    const restarted = new ServerProfiles(setup.options);
+    await restarted.initialize();
+    assert.equal(restarted.activeId(), activeId);
+    assert.equal(restarted.directoryFor(setup.id), setup.directory);
+    assert.deepEqual(await restarted.listRemoved(), []);
+    await access(path.join(setup.directory, 'backups', 'saved.zip'));
+    await absent(setup.bundle);
+    await absent(setup.journal);
+  });
+}
+
+test('ambiguous restoration recovery preserves every copy and its journal', async t => {
+  const setup = await deletedFixture(t, 'managed');
+  await provision(setup.directory);
+  await json(setup.journal, { operation: 'restore', profile: setup.stored, moves: ['runtime'] });
+  const restarted = new ServerProfiles(setup.options);
+  await assert.rejects(restarted.initialize(), /ambiguous/);
+  assert.throws(() => restarted.activeId(), /not initialized/);
+  await access(path.join(setup.bundle, 'runtime', 'minecraft', 'world', 'level.dat'));
+  await access(path.join(setup.directory, 'minecraft', 'world', 'level.dat'));
+  await access(setup.journal);
+});
+
+test('restoration journals reject traversal, wrong-layout, duplicate, and incomplete moves', async t => {
+  const setup = await deletedFixture(t, 'legacy');
+  for (const moves of [['../minecraft'], ['runtime'], ['minecraft', 'minecraft'], ['backups']]) {
+    await json(setup.journal, { operation: 'restore', profile: setup.stored, moves });
+    await assert.rejects(new ServerProfiles(setup.options).initialize(), /invalid/);
+    await access(path.join(setup.bundle, 'minecraft', 'world', 'level.dat'));
+    await absent(path.join(setup.root, 'minecraft'));
+    await access(setup.journal);
+  }
+});
+
+test('committed restoration recovery survives interruption during archive metadata cleanup', async t => {
+  for (const phase of ['metadata-removed', 'bundle-removed'] as const) {
+    const setup = await deletedFixture(t, 'managed');
+    await json(setup.journal, { operation: 'restore', profile: setup.stored, moves: ['runtime'] });
+    await rename(path.join(setup.bundle, 'runtime'), setup.directory);
+    const registry = await readJson(setup.registry);
+    registry.profiles.push(setup.stored);
+    await json(setup.registry, registry);
+    await rm(path.join(setup.bundle, 'profile.json'));
+    if (phase === 'bundle-removed') await rm(setup.bundle, { recursive: true });
+    const restarted = new ServerProfiles(setup.options);
+    await restarted.initialize();
+    assert.equal(restarted.directoryFor(setup.id), setup.directory);
+    assert.equal(restarted.activeId(), registry.activeId);
+    await access(path.join(setup.directory, 'backups', 'saved.zip'));
+    await absent(setup.bundle);
+    await absent(setup.journal);
+  }
+});
+
+test('deleted archive parents cannot be replaced by symlinks', async t => {
+  const setup = await deletedFixture(t, 'managed');
+  const parent = path.dirname(setup.bundle);
+  const relocated = path.join(setup.root, 'archived-folders');
+  await rename(parent, relocated);
+  await symlink(relocated, parent);
+  await assert.rejects(setup.profiles.listRemoved(), /regular directory/);
+  await assert.rejects(setup.profiles.recoveryDirectoryFor(setup.id), /regular directory/);
+  await assert.rejects(setup.profiles.restore(setup.id), /regular directory/);
+  await access(path.join(relocated, setup.id, 'runtime', 'backups', 'saved.zip'));
+  await absent(setup.directory);
+});
+
+test('conflicting archived metadata aborts restoration recovery without moving files', async t => {
+  const setup = await deletedFixture(t, 'managed');
+  await json(setup.journal, { operation: 'restore', profile: { ...setup.stored, name: 'Changed name' }, moves: ['runtime'] });
+  await assert.rejects(new ServerProfiles(setup.options).initialize(), /does not match/);
+  await access(path.join(setup.bundle, 'runtime', 'backups', 'saved.zip'));
+  await absent(setup.directory);
+  await access(setup.journal);
+});
+
+test('deleted-server listings remain responsive during provisioning and return immutable copies', async t => {
+  const setup = await deletedFixture(t, 'managed');
+  const removed = await setup.profiles.listRemoved();
+  removed[0]!.name = 'Mutated client copy';
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const creation = setup.profiles.create('Installing', async directory => { enter(); await waiting; await provision(directory); });
+  await entered;
+  try {
+    const listing = await Promise.race([setup.profiles.listRemoved(), new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(new Error('Deleted-server listing blocked behind installation.')), 500); timer.unref(); })]);
+    assert.equal(listing.length, 1);
+    assert.equal(listing[0]!.name, setup.stored.name);
+  } finally { release(); await creation; }
 });

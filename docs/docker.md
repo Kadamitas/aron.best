@@ -45,6 +45,7 @@ The image versions are configurable with `NODE_IMAGE`, `JAVA_IMAGE`, `JAVA8_IMAG
 | `MINECRAFT_MEMORY_MB` | Maximum Java heap in MB |
 | `MINECRAFT_MEMORY_LIMIT` | Entire controller container limit, including Java and Node |
 | `MINECRAFT_CPUS` | Controller CPU allowance |
+| `MINECRAFT_START_TIMEOUT_SECONDS` | Maximum startup wait, default `600` seconds |
 | `MINECRAFT_AUTOSTART` | Start the game after the controller starts |
 | `APP_PUBLISHED_PORT` | Loopback website port, default `3300` |
 | `MINECRAFT_PUBLISHED_PORT` | Loopback preview game port, default `25575` |
@@ -56,7 +57,7 @@ The image versions are configurable with `NODE_IMAGE`, `JAVA_IMAGE`, `JAVA8_IMAG
 
 There is no hardcoded laptop IP in the containers. On a new host, restore the data and secrets, set the domains and resource limits, then point DNS and any router forwarding at the new machine. If using a public game port other than `25565`, include it in `MINECRAFT_ADDRESS` or configure a Minecraft DNS SRV record. An IP address alone does not migrate the world, secrets or certificates.
 
-Keep `MINECRAFT_MEMORY_LIMIT` higher than the Java heap. Its default `6g` leaves space beyond the `4096` MB heap for Java native memory, the controller and file operations. Changing `COMPOSE_PROJECT_NAME` selects different volumes; it does not move existing data.
+Keep `MINECRAFT_MEMORY_LIMIT` higher than the Java heap and below the memory available to Docker, leaving room for the other containers. Compose's fallback is `6g` with a `4096` MB heap. Newly generated configuration instead requests 80 percent of host memory, reserving 1.5 GiB of that for native memory and controller operations. Docker Desktop can have a smaller memory allocation than the host, so check its allocation before using those generated values. Preparation preserves existing configuration. Changing `COMPOSE_PROJECT_NAME` selects different volumes; it does not move existing data.
 
 The initial loader is Fabric. The workshop's Minecraft and loader labels let invited users select a compatible installation while the game is stopped. Save opens a confirmation, stages official files, retains the previous installation, and leaves the new server stopped. Existing worlds and mods are preserved, not converted. See `docs/workshop.md` for compatibility and snapshot limits. Editing bootstrap environment variables does not overwrite a saved installation or migrate world data.
 
@@ -87,7 +88,7 @@ docker compose --env-file .runtime/docker/compose.env up -d network-edge
 docker compose --env-file .runtime/docker/compose.env run --rm --no-deps minecraft node dist/server/reinstall-runtime.js --controller-stopped
 ```
 
-Import sends `pack.json` and `ip-access.json` to the website volume, and `minecraft/` and `backups/` to the controller volume. It rejects symbolic links, hard links and special files, and refuses nonempty destination volumes. It streams the files over standard input; the source directory is never mounted into a container. The original runtime is preserved, and importing starts no website or Minecraft process. A failed partial import is left in place for inspection; use a fresh project namespace to retry after identifying the cause.
+Import sends `pack.json` and `ip-access.json` to the website volume, and `minecraft/`, `backups/` and any `backup-objects/` store to the controller volume. It rejects symbolic links, hard links and special files, and refuses nonempty destination volumes. It streams the files over standard input; the source directory is never mounted into a container. The original runtime is preserved, and importing starts no website or Minecraft process. A failed partial import is left in place for inspection; use a fresh project namespace to retry after identifying the cause.
 
 The final command reinstalls official runtime files and creates their trust manifests before the imported server can start. Keep the app and controller stopped until it succeeds. See the runtime trust details below if reinstallation fails.
 
@@ -104,6 +105,16 @@ DNS for the site hostnames and `mc.aron.best` must reach this machine. Router fo
 The old macOS LaunchAgent plist files remain after `--stop` and can load again at the next login. Follow `docs/hosting.md` to uninstall those native agents once Docker has passed the live checks. Keep the offline data until the migrated world and invitation access have been verified. If reverting before playing on the new world, stop the Docker stack and restore the native services against their untouched runtime. After players use the new world, export its current data before any rollback to avoid losing progress.
 
 ## Back up or move to another host
+
+Server backups use SHA-256 content-addressed objects in `/data/backup-objects`, shared by all slots, with per-server snapshot manifests beside each server's data. Six successful snapshots are retained per server. Deleted servers and their manifests remain in protected recovery storage. Full-volume exports include shared objects and deleted servers; copying a format-2 snapshot manifest by itself is not a usable backup. The Recovery download reconstructs a self-contained archive.
+
+To convert older full-copy backups, first stop the app and controller and export their current state. Then run the migration with the new image while both remain stopped:
+
+```sh
+docker compose --env-file .runtime/docker/compose.env run --rm --no-deps minecraft node dist/server/migrate-backups.js --controller-stopped
+```
+
+Migration verifies content before committing each shared-object manifest and only then removes its redundant old copies. It can resume after an interrupted cleanup. It preserves existing snapshot count; later successful backups enforce six-snapshot retention. Unknown metadata, links and unexplained storage layouts stop cleanup without deleting recovery data.
 
 Runtime trust is deliberately not reconstructed from imported or restored modpack files. After an import or restoration, stop the app and controller, bring up `network-edge`, then rebuild official runtime files while retaining mods, configurations and worlds:
 

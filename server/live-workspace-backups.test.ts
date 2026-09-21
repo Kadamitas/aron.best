@@ -212,7 +212,7 @@ test('saved backup downloads stay bound to their original server after an active
     const tar = gunzipSync(download.rawPayload);
     for (const included of ['world/level.dat', 'original-world', 'mods/original.jar', 'defaultconfigs/settings.toml', 'kubejs/startup.js', 'installation.json']) assert(tar.includes(Buffer.from(included)), included);
     assert(!tar.includes(Buffer.from('private-host-secret')));
-    assert.equal((await readdir(path.join(setup.root, 'backups'))).filter(name => name.endsWith('.tar.gz')).length, 1);
+    assert.equal((await readdir(path.join(setup.root, 'backups'))).filter(name => name.endsWith('.tar.gz')).length, 0);
   } finally { await web?.close(); await setup.dispose(); await rm(appRoot, { recursive: true, force: true }); }
 });
 

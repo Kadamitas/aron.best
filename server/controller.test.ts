@@ -187,7 +187,8 @@ test('an invited website installation updates the controller target and download
     assert.equal(working.pack.minecraftVersion, '26.3');
     release();
     let status = working;
-    for (let attempt = 0; attempt < 40; attempt++) {
+    const installationDeadline = Date.now() + 30_000;
+    while (Date.now() < installationDeadline) {
       const response = await web.inject({ url: '/api/status', headers });
       assert.equal(response.statusCode, 200);
       status = response.json();
@@ -237,8 +238,12 @@ test('version installation is authenticated, exclusive, stopped and reports fail
     assert.equal((await setup.app.inject({ method: 'POST', url: '/action', headers: authorization, payload: { action: 'start' } })).statusCode, 409);
     assert.equal((await setup.app.inject({ method: 'POST', url: '/workspace/entries/remove', headers: authorization, payload: { path: 'config/settings.json' } })).statusCode, 409);
     release();
-    await new Promise(resolve => setImmediate(resolve));
-    const status = (await setup.app.inject({ url: '/status', headers: authorization })).json().server;
+    let status = (await setup.app.inject({ url: '/status', headers: authorization })).json().server;
+    const installationDeadline = Date.now() + 30_000;
+    while (status.busy && Date.now() < installationDeadline) {
+      await delay(25);
+      status = (await setup.app.inject({ url: '/status', headers: authorization })).json().server;
+    }
     assert.equal(status.busy, false);
     assert.equal(status.version, '26.3');
     assert.match(status.installationError, /original retained/);

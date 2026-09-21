@@ -7,8 +7,8 @@ import type { BackupJob } from './backup-archive.js';
 
 type ServerStatus = ReturnType<MinecraftServer['status']>;
 export interface ControllerSnapshot {
-  server: ServerStatus & { installationError?: string; profileError?: string };
-  workspace: { profileId: string; server: ServerStatus & { installationError?: string }; updatedAt: string | null };
+  server: ServerStatus & { installationError?: string; profileError?: string; backupError?: string; operation?: string };
+  workspace: { profileId: string; server: ServerStatus & { installationError?: string; operation?: string }; updatedAt: string | null };
   profiles: Awaited<ReturnType<ServerProfiles['list']>>;
   profileBindingRequired: boolean;
   isolated: boolean;
@@ -55,7 +55,18 @@ export class ControllerClient {
   async shutdown(): Promise<void> {}
   async versions(minecraftVersion?: string): Promise<unknown> { return this.json(`/versions${minecraftVersion ? `?${new URLSearchParams({ minecraftVersion })}` : ''}`); }
   async install(target: unknown): Promise<{ accepted: boolean }> { const result = await this.json<{ accepted: boolean }>('/installation', 'POST', target); await this.refresh(); return result; }
-  async profile(action: 'create' | 'select' | 'rename' | 'remove', body: unknown): Promise<unknown> { return this.json(action === 'create' ? '/profiles' : `/profiles/${action}`, 'POST', body); }
+  async profile(action: 'create' | 'select' | 'rename' | 'remove' | 'restore', body: unknown): Promise<unknown> { return this.json(action === 'create' ? '/profiles' : `/profiles/${action}`, 'POST', body, 15 * 60_000); }
+  async recovery(): Promise<unknown> { return this.json('/recovery'); }
+  async downloadSavedBackup(profileId: string, id: string) {
+    const response = await this.request(`/recovery/backups/${encodeURIComponent(profileId)}/${encodeURIComponent(id)}/download`, 'GET', undefined, 30 * 60_000);
+    if (!response.body) throw new Error('Controller returned an empty backup download.');
+    const size = Number(response.headers.get('content-length'));
+    if (!Number.isSafeInteger(size) || size < 1) {
+      await response.body.cancel();
+      throw new Error('Controller returned an invalid backup download.');
+    }
+    return { stream: Readable.fromWeb(response.body as never), size };
+  }
   async createBackup(): Promise<Pick<BackupJob, 'id' | 'profileId'>> { return this.json('/backups', 'POST', {}); }
   async backup(id: string): Promise<BackupJob> { return this.json(`/backups/${id}`); }
   async downloadBackup(id: string) {
@@ -100,7 +111,7 @@ export class ControllerClient {
     },
   };
 
-  private async request(route: string, method = 'GET', body?: unknown, timeout = 30_000): Promise<Response> {
+  private async request(route: string, method = 'GET', body?: unknown, timeout = method !== 'GET' && route.startsWith('/workspace/') ? 15 * 60_000 : 30_000): Promise<Response> {
     const context = this.profileContext.getStore();
     const response = await fetch(new URL(route, this.origin), {
       method, redirect: 'error', signal: AbortSignal.timeout(timeout),

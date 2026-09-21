@@ -32,7 +32,9 @@ export interface WorkshopStatus {
     address: string;
     uptimeSeconds?: number;
     lastBackup?: string;
+    backupError?: string | null;
     busy?: boolean;
+    operation?: string;
     failure?: { at: string; message: string; exitCode?: number | null; recoveredAt?: string } | null;
     crashLog?: string[];
     installationError?: string;
@@ -120,6 +122,25 @@ export interface ServerProfiles {
   activeId: string;
   profiles: SavedServer[];
   limit: number;
+}
+
+export interface RecoverableServer extends SavedServer {
+  deleted: boolean;
+  removedAt?: string;
+}
+
+export interface RetainedBackup {
+  id: string;
+  profileId: string;
+  createdAt: string;
+  kind: 'manual' | 'automatic';
+  sizeBytes: string;
+}
+
+export interface ServerRecovery {
+  servers: RecoverableServer[];
+  backups: RetainedBackup[];
+  automatic: { enabled: boolean; intervalHours: number; retained: number; error?: string | null };
 }
 
 @Injectable({ providedIn: 'root' })
@@ -230,6 +251,18 @@ export class WorkshopApi {
 
   removeServerProfile(id: string): Promise<unknown> {
     return firstValueFrom(this.http.post('/api/server/profiles/remove', { id }, { headers: this.headers }));
+  }
+
+  serverRecovery(): Promise<ServerRecovery> {
+    return firstValueFrom(this.http.get<ServerRecovery>('/api/server/recovery', { headers: this.headers }).pipe(timeout(30_000)));
+  }
+
+  restoreServerProfile(id: string): Promise<{ restored: boolean }> {
+    return firstValueFrom(this.http.post<{ restored: boolean }>('/api/server/profiles/restore', { id }, { headers: this.headers }).pipe(timeout(30_000)));
+  }
+
+  retainedBackupDownloadUrl(backup: Pick<RetainedBackup, 'profileId' | 'id'>): string {
+    return `/api/server/recovery/backups/${encodeURIComponent(backup.profileId)}/${encodeURIComponent(backup.id)}/download`;
   }
 
   downloadPack(profileId = this.selectedWorkspaceId): Promise<Blob> {

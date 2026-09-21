@@ -83,7 +83,7 @@ async function hash(filename) {
 async function importLocal() {
   if (!values['offline-snapshot']) throw new Error('Import requires --offline-snapshot pointing to a runtime copy made after stopping the original Minecraft server.');
   const snapshot = path.resolve(values['offline-snapshot']);
-  const folders = { app: ['pack.json', 'ip-access.json'], minecraft: ['minecraft', 'backups'] };
+  const folders = { app: ['pack.json', 'ip-access.json'], minecraft: ['minecraft', 'backups', 'backup-objects'] };
   const root = await lstat(snapshot);
   if (!root.isDirectory() || root.isSymbolicLink()) throw new Error('The offline snapshot must be a real directory.');
   await access(path.join(snapshot, 'minecraft', 'server.properties'));

@@ -17,6 +17,7 @@ import { IconComponent } from './icon.component';
 import { ConfirmDialogComponent, ConfirmDialogData } from './confirm-dialog.component';
 import { ServerProfileDialogComponent, ServerProfileDialogData } from './server-profile-dialog.component';
 import { ServerBackupDialogComponent, ServerBackupDialogData } from './server-backup-dialog.component';
+import { ServerRecoveryDialogComponent, ServerRecoveryDialogData } from './server-recovery-dialog.component';
 import { ModAction, SavedServer, ServerAction, ServerTarget, WorkspaceMod, WorkshopApi, WorkshopStatus, downloadBlob, errorMessage, fileSize } from './workshop-api.service';
 
 type LoaderChoice = Pick<ServerTarget, 'loader' | 'loaderVersion'>;
@@ -90,12 +91,31 @@ export class WorkshopComponent {
   readonly workspaceReady = computed(() => this.authorized() && !!this.status()?.profiles && !this.busy() && !this.profileOperation() && !this.workspaceLocked() && !this.connectionError());
   readonly profilesReady = computed(() => this.workspaceReady() && this.status()?.capabilities.workspaceWrite === true && !this.serverTransitioning() && !this.workspaceTransitioning());
   readonly canCreateProfile = computed(() => this.profilesReady() && (this.status()?.profiles?.profiles.length ?? 0) < (this.status()?.profiles?.limit ?? 5));
-  readonly profileProgress = computed(() => {
+  readonly operationStatus = computed(() => {
     const operation = this.profileOperation();
-    if (this.connectionError() || this.profileOperationError() || (!operation && this.status()?.server.profileError)) return '';
-    if (operation) return operation.kind === 'create' ? `Creating ${operation.name}...` : `Setting ${operation.name} active...`;
-    if (this.busy() === 'workspace:select') return 'Opening saved server...';
-    return this.serverTransitioning() ? 'Server operation in progress...' : '';
+    if (this.connectionError()) return '';
+    const profileLabel = operation ? operation.kind === 'create' ? `Creating ${operation.name}...` : `Switching to ${operation.name}` : '';
+    if (operation?.accepted === false) return profileLabel;
+    const remote = this.status()?.server.operation || this.workspaceServer()?.operation;
+    if (remote) return remote;
+    if (operation && !this.profileOperationError()) return profileLabel;
+    const local: Record<string, string> = {
+      'server:start': 'Starting server', 'server:restart': 'Restarting server', 'server:stop': 'Shutting down server',
+      'server:backup': 'Saving backup', 'server:update': 'Updating server', 'server:sync-profile': 'Syncing server files',
+      'profile:remove': 'Hiding saved server', 'profile:restore': 'Restoring server', 'workspace:select': 'Opening saved server',
+      installation: `Installing Minecraft ${this.installation().minecraftVersion} with ${this.installation().loader} ${this.installation().loaderVersion}`,
+      install: 'Adding mods', download: 'Preparing modpack download',
+    };
+    if (local[this.busy()]) return local[this.busy()]!;
+    if (this.busy().startsWith('mod:')) return 'Updating mods';
+    const states: Record<string, string> = { starting: 'Starting server', stopping: 'Shutting down server', restarting: 'Restarting server', updating: 'Updating server' };
+    return states[this.status()?.server.state ?? ''] ?? states[this.workspaceServer()?.state ?? ''] ?? '';
+  });
+  readonly operationDetail = computed(() => {
+    const label = this.operationStatus();
+    if (label.startsWith('Creating ') || label.startsWith('Installing Minecraft ')) return 'Installing server files can take a few minutes.';
+    if (label.startsWith('Switching to ')) return 'The current world is saved before switching. The selected server will stay stopped.';
+    return '';
   });
   readonly writable = computed(() => this.authorized() && this.status()?.capabilities.workspaceWrite === true && ['stopped', 'not-installed', 'failed'].includes(this.workspaceServer()?.state ?? '') && !this.workspaceTransitioning());
   readonly canAddMods = computed(() => this.authorized() && this.status()?.capabilities.workspaceWrite === true && !this.workspaceTransitioning() && ['running', 'online', 'stopped', 'not-installed', 'failed'].includes(this.workspaceServer()?.state ?? ''));
@@ -156,7 +176,7 @@ export class WorkshopComponent {
   constructor() {
     void this.refresh();
     const timer = setInterval(() => {
-      const interval = this.profileOperation() || this.serverTransitioning() ? 3_000 : 15_000;
+      const interval = this.operationStatus() || this.serverTransitioning() ? 3_000 : 15_000;
       if (document.visibilityState === 'visible' && !this.busy() && !this.statusInFlight && this.profileOperation()?.accepted !== false && Date.now() - this.lastStatusRefresh >= interval) void this.refresh(false);
     }, 3_000);
     this.destroyRef.onDestroy(() => clearInterval(timer));
@@ -282,9 +302,27 @@ export class WorkshopComponent {
 
   async removeProfile(profile: SavedServer): Promise<void> {
     if (!this.profilesReady() || profile.id === this.activeProfile()?.id) return;
-    if (!await this.confirm({ title: `Delete ${profile.name}?`, description: 'This removes the saved server, including its world, mods and settings, from the list and frees a server slot. Its files will be kept in recovery storage. The active server is not affected.', confirm: 'Delete saved server' })) return;
+    if (!await this.confirm({ title: `Delete ${profile.name}?`, description: 'This only hides the server from your saved servers and frees a slot. Its world, mods, settings and backups are kept. You can bring it back from Recovery at any time. The active server is not affected.', confirm: 'Delete saved server' })) return;
     if (!this.profilesReady() || profile.id === this.activeProfile()?.id) return;
-    await this.perform('profile:remove', () => this.api.removeServerProfile(profile.id), 'Saved server deleted. Its files were kept in recovery storage.');
+    await this.perform('profile:remove', () => this.api.removeServerProfile(profile.id), 'Server hidden. Restore it at any time from Recovery.');
+  }
+
+  openRecovery(): void {
+    if (!this.authorized() || this.busy() || this.workspaceLocked()) return;
+    this.dialog.open<ServerRecoveryDialogComponent, ServerRecoveryDialogData>(ServerRecoveryDialogComponent, {
+      width: '620px', maxWidth: 'calc(100vw - 32px)',
+      data: {
+        profileId: this.workspaceId(), limit: this.status()?.profiles?.limit ?? 5,
+        restore: async id => {
+          if (!this.profilesReady()) throw new Error('Wait for the current server operation to finish, then try again.');
+          this.busy.set('profile:restore');
+          try {
+            await this.api.restoreServerProfile(id);
+            await this.refresh(false);
+          } finally { this.busy.set(''); }
+        },
+      },
+    });
   }
 
   async loadInstallationOptions(version = this.installation().minecraftVersion, chooseLoader = false): Promise<void> {

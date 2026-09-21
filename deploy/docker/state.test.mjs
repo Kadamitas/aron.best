@@ -49,7 +49,9 @@ test('Docker state transfers preserve data and reject unsafe restores', { skip: 
     await writeFile(path.join(secrets, name), `${name}-synthetic-testing-token-1234567890`, { mode: 0o444 });
   }
   const environment = project => ({ ...process.env, COMPOSE_PROJECT_NAME: project, DOCKER_SECRETS_DIRECTORY: secrets,
-    WEB_SUBNET: `10.239.${81 + projects.indexOf(project)}.0/24`, CADDY_ADDRESS: `10.239.${81 + projects.indexOf(project)}.2` });
+    WEB_SUBNET: `10.239.${81 + projects.indexOf(project)}.0/24`, CADDY_ADDRESS: `10.239.${81 + projects.indexOf(project)}.2`,
+    APP_ADDRESS: `10.239.${81 + projects.indexOf(project)}.3`, GAME_SUBNET: `10.239.${91 + projects.indexOf(project)}.0/24`,
+    NETWORK_EDGE_ADDRESS: `10.239.${91 + projects.indexOf(project)}.2` });
   const compose = (project, args) => command('docker', ['compose', '--env-file', environmentFile, '-f', 'compose.yaml', ...args], { env: environment(project) });
   const state = (project, args, expectedSuccess = true) => {
     const result = spawnSync(process.execPath, ['scripts/docker-state.mjs', ...args, '--env-file', environmentFile], { cwd: repository, env: environment(project), encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
@@ -74,7 +76,14 @@ test('Docker state transfers preserve data and reject unsafe restores', { skip: 
     'backups/fixture.txt': 'synthetic prior backup\n',
   };
   for (const [filename, content] of Object.entries(fixtures)) await writeFile(path.join(snapshot, filename), content, { mode: 0o600 });
+  const objectContents = 'shared portable backup object';
+  const objectHash = createHash('sha256').update(objectContents).digest('hex');
+  const objectPath = `backup-objects/${objectHash.slice(0, 2)}/${objectHash}`;
+  await mkdir(path.join(snapshot, path.dirname(objectPath)), { recursive: true, mode: 0o700 });
+  await writeFile(path.join(snapshot, objectPath), objectContents, { mode: 0o400 });
+  const inspectObject = `const f=require('node:fs');const p='/data/${objectPath}';console.log(JSON.stringify({contents:f.readFileSync(p,'utf8'),mode:f.statSync(p).mode&511}))`;
   state(projects[0], ['import-local', '--offline-snapshot', snapshot]);
+  assert.deepEqual(inspect(projects[0], 'minecraft', inspectObject), { contents: objectContents, mode: 0o400 });
   const inspectApp = "const f=require('node:fs');console.log(JSON.stringify({pack:f.readFileSync('/data/pack.json','utf8'),grants:f.readFileSync('/data/ip-access.json','utf8'),entries:f.readdirSync('/data')}))";
   const inspectGame = "const f=require('node:fs');console.log(JSON.stringify({properties:f.readFileSync('/data/minecraft/server.properties','utf8'),world:f.readFileSync('/data/minecraft/world/level.dat','utf8'),backup:f.readFileSync('/data/backups/fixture.txt','utf8'),entries:f.readdirSync('/data')}))";
   const importedApp = inspect(projects[0], 'app', inspectApp);
@@ -94,7 +103,7 @@ test('Docker state transfers preserve data and reject unsafe restores', { skip: 
       ...savedIds.map((id, index) => ({ id, name: `Saved server ${index + 1}`, location: 'managed' })),
     ] }),
     'installation-snapshots/before-version-change/world/level.dat': 'retained-original-installation-world\0',
-    [`deleted-server-profiles/${deletedId}/profile.json`]: JSON.stringify({ id: deletedId, name: 'Deleted server fixture', location: 'managed', removedAt: '2026-09-21T12:00:00.000Z' }),
+    [`deleted-server-profiles/${deletedId}/profile.json`]: JSON.stringify({ id: deletedId, name: 'Deleted server fixture', location: 'managed', minecraftVersion: '1.21.1', loader: 'Fabric', loaderVersion: '0.18.4', removedAt: '2026-09-21T12:00:00.000Z' }),
     [`deleted-server-profiles/${deletedId}/runtime/minecraft/world/level.dat`]: 'recoverable-deleted-world\0\u0003',
     [`deleted-server-profiles/${deletedId}/runtime/minecraft/config/settings.json`]: '{"recovery":"retained"}\n',
     [`deleted-server-profiles/${deletedId}/runtime/backups/deleted-server.txt`]: 'recoverable-server-backup\n',
@@ -119,6 +128,7 @@ test('Docker state transfers preserve data and reject unsafe restores', { skip: 
   const backup = path.join(directory, 'backup');
   state(projects[0], ['export', backup]);
   state(projects[1], ['restore', backup]);
+  assert.deepEqual(inspect(projects[1], 'minecraft', inspectObject), { contents: objectContents, mode: 0o400 });
   assert.deepEqual(inspect(projects[1], 'app', inspectApp), importedApp);
   assert.deepEqual(inspect(projects[1], 'minecraft', inspectGame), portableGame);
   const restoredProfiles = inspect(projects[1], 'minecraft', inspectProfiles);

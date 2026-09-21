@@ -21,7 +21,7 @@ export interface ServerBackupDialogData {
   template: `
     <h2 mat-dialog-title>Back up {{ data.name }}</h2>
     <mat-dialog-content>
-      <p>A copy of this server's world, mods and settings stays on the server.</p>
+      <p>A copy of this server's world, mods and settings stays in Recovery, outside the Advanced file browser. It is kept even if you delete the server.</p>
       <p class="detail">If it is running, it will stop safely to save the world and restart after the backup. Players will briefly disconnect.</p>
       @if (!complete()) {
         <mat-checkbox [checked]="download()" (change)="download.set($event.checked)" [disabled]="busy() || !!job()">Also download to my computer</mat-checkbox>

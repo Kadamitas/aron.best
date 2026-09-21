@@ -162,7 +162,7 @@ try {
   assert.equal(status.server.state, 'running');
   await page.getByRole('button', { name: 'Set active', exact: true }).click();
   await dialog.getByRole('button', { name: 'Stop and set active', exact: true }).click();
-  await expect(page.getByRole('status').filter({ hasText: 'Setting Direwolf20 active...' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Switching to Direwolf20' })).toBeVisible();
   await expect(selector).toBeDisabled();
   assert.equal(status.profiles.activeId, 'infinity');
   await expect.poll(() => typeof completeProfileOperation).toBe('function');
@@ -208,7 +208,8 @@ try {
   await manage('Direwolf20 classic');
   await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
   dialog = page.getByRole('dialog', { name: 'Delete Direwolf20 classic?', exact: true });
-  await expect(dialog).toContainText('recovery storage');
+  await expect(dialog).toContainText('Its world, mods, settings and backups are kept.');
+  await expect(dialog).toContainText('Recovery at any time');
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   assert.equal(requests.length, 5);
   await select('Direwolf20 classic');
@@ -243,14 +244,14 @@ try {
   await page.getByRole('button', { name: 'Set active', exact: true }).click();
   dialog = page.getByRole('dialog', { name: 'Set Fresh world active?', exact: true });
   await dialog.getByRole('button', { name: 'Set active', exact: true }).click();
-  await expect(page.getByRole('status').filter({ hasText: 'Setting Fresh world active...' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Switching to Fresh world' })).toBeVisible();
   await expect.poll(() => typeof completeProfileOperation).toBe('function');
   status.jobRunning = false;
   status.server.busy = false;
   status.server.profileError = 'Fixture switch failed without changing the active server.';
   completeProfileOperation = undefined;
   await expect(page.getByRole('alert')).toContainText('Fixture switch failed', { timeout: 20_000 });
-  await expect(page.getByRole('status').filter({ hasText: 'Setting Fresh world active...' })).toBeHidden();
+  await expect(page.getByRole('status').filter({ hasText: 'Switching to Fresh world' })).toBeHidden();
   assert.equal(status.profiles.activeId, 'infinity');
   await page.getByRole('button', { name: 'New server', exact: true }).click();
   dialog = page.getByRole('dialog', { name: 'Create a saved server', exact: true });

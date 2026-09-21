@@ -5,6 +5,7 @@ import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createGzip } from 'node:zlib';
+import { BackupObjects, maximumBackupManifestBytes, validateBackupObjectManifest } from './backup-objects.js';
 
 export interface BackupJob {
   id: string;
@@ -139,7 +140,64 @@ async function* archiveEntries(root: FileHandle): AsyncGenerator<Buffer> {
   yield Buffer.alloc(1024);
 }
 
-export async function createBackupArchive(snapshot: string): Promise<BackupArtifact> {
+async function* contentAddressedEntries(root: FileHandle, objectsDirectory: string | undefined): AsyncGenerator<Buffer> {
+  const file = await open(path.join(anchored(root), 'backup.json'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  let contents: Buffer;
+  try {
+    const before = await file.stat();
+    regular(before);
+    if (before.size > maximumBackupManifestBytes) throw failure('The backup manifest is too large.');
+    contents = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < contents.length) {
+      const { bytesRead } = await file.read(contents, offset, contents.length - offset, offset);
+      if (!bytesRead) throw failure('The backup manifest changed while reading.');
+      offset += bytesRead;
+    }
+    const after = await file.stat();
+    regular(after);
+    if (before.size !== after.size || before.ctimeMs !== after.ctimeMs) throw failure('The backup manifest changed while reading.');
+  } finally { await file.close(); }
+  const stored = JSON.parse(contents.toString('utf8'));
+  if (stored.format === undefined) { yield* archiveEntries(root); return; }
+  if (stored.format !== 2 || !objectsDirectory) throw failure('This backup format is not available.');
+  const manifest = validateBackupObjectManifest({ files: stored.files, directories: stored.directories, snapshotBytes: stored.snapshotBytes });
+  const objects = new BackupObjects(objectsDirectory);
+  let entries = 0;
+  function* prefix(name: string, size: number, type = '0') {
+    entries++;
+    if (Buffer.byteLength(name) > 100 || !/^[\x20-\x7e]+$/.test(name)) {
+      const attributes = paxPath(name);
+      yield header(`PaxHeaders/${entries}`, attributes.length, 'x');
+      yield attributes;
+      if (attributes.length % 512) yield Buffer.alloc(512 - attributes.length % 512);
+    }
+    yield header(Buffer.byteLength(name) <= 100 && /^[\x20-\x7e]+$/.test(name) ? name : `entry-${entries}`, size, type);
+  }
+  for (const name of manifest.directories) yield* prefix(`${name}/`, 0, '5');
+  for (const entry of manifest.files) {
+    if (entry.size > maximumEntryBytes) throw failure('A backup file is too large for its download archive.', 413);
+    const object = await objects.openObject(entry.sha256, entry.size);
+    try {
+      yield* prefix(entry.path, entry.size);
+      let offset = 0;
+      while (offset < entry.size) {
+        const bytes = Buffer.allocUnsafe(Math.min(64 * 1024, entry.size - offset));
+        const { bytesRead } = await object.read(bytes, 0, bytes.length, offset);
+        if (!bytesRead) throw failure('A backup object changed while reading.');
+        offset += bytesRead;
+        yield bytes.subarray(0, bytesRead);
+      }
+      if (entry.size % 512) yield Buffer.alloc(512 - entry.size % 512);
+    } finally { await object.close(); }
+  }
+  yield* prefix('backup.json', contents.length);
+  yield contents;
+  if (contents.length % 512) yield Buffer.alloc(512 - contents.length % 512);
+  yield Buffer.alloc(1024);
+}
+
+export async function createBackupArchive(snapshot: string, objectsDirectory?: string): Promise<BackupArtifact> {
   const parent = await directory(path.dirname(snapshot));
   const name = path.basename(snapshot);
   let root: FileHandle | undefined;
@@ -162,7 +220,8 @@ export async function createBackupArchive(snapshot: string): Promise<BackupArtif
       sinceSpaceCheck = 0;
       void assertSpace().then(() => complete(null, chunk), error => complete(error));
     } });
-    await pipeline(Readable.from(archiveEntries(root)), createGzip({ level: 1 }), reserve, output.createWriteStream({ autoClose: true, flush: true }), { signal: AbortSignal.timeout(archiveTimeout) });
+    const hasManifest = await lstat(path.join(anchored(root), 'backup.json')).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; });
+    await pipeline(Readable.from(hasManifest ? contentAddressedEntries(root, objectsDirectory) : archiveEntries(root)), createGzip({ level: 1 }), reserve, output.createWriteStream({ autoClose: true, flush: true }), { signal: AbortSignal.timeout(archiveTimeout) });
     output = undefined;
     const identity = await lstat(temporary);
     regular(identity);
@@ -188,5 +247,17 @@ export async function downloadBackup(artifact: BackupArtifact) {
       if (!sameFile(info, artifact.identity) || info.size !== artifact.size || info.mtimeMs !== artifact.identity.mtimeMs) throw failure('This saved backup archive changed and is no longer available.');
       return { stream: handle.createReadStream({ autoClose: true, end: info.size - 1 }), size: info.size };
     } catch (error) { await handle.close(); throw error; }
+  } finally { await parent.close(); }
+}
+
+export async function discardBackupArchive(artifact: BackupArtifact): Promise<void> {
+  const parent = await directory(path.dirname(artifact.path));
+  try {
+    const filename = path.join(anchored(parent), path.basename(artifact.path));
+    const current = await lstat(filename);
+    regular(current);
+    if (!sameFile(current, artifact.identity) || current.size !== artifact.size || current.mtimeMs !== artifact.identity.mtimeMs) throw failure('The temporary backup archive changed before cleanup.');
+    await unlink(filename);
+    await parent.sync();
   } finally { await parent.close(); }
 }
