@@ -1,0 +1,18 @@
+:host { display: block; }
+h2 { font-size: 20px; font-weight: 500; }
+mat-dialog-content { font-size: 13px; line-height: 1.7; }
+mat-dialog-content p { margin: 0 0 17px; }
+mat-dialog-content strong { color: #d1dfcb; font-weight: 500; overflow-wrap: anywhere; }
+mat-form-field { width: 100%; --mat-form-field-container-text-size: 14px; }
+.path { color: #91a38e; font: 11px/1.7 'SFMono-Regular', Consolas, monospace; overflow-wrap: anywhere; }
+.hint { font-size: 11px; color: #92a28d; margin-top: 13px !important; }
+.warning { color: #c6b58f; font-size: 12px; margin-top: 13px !important; }
+.error { color: #efb1a8; background: #efb1a807; border: 1px solid #efb1a822; padding: 10px 12px; border-radius: 6px; margin-top: 15px !important; }
+.folder-picker { border: 1px solid #ffffff16; border-radius: 7px; max-height: 280px; overflow: auto; padding: 5px; margin-bottom: 12px; }
+.folder-picker button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 11px 10px 11px calc(10px + var(--depth) * 12px); font-size: 12px; text-align: left; color: #a9baa3; background: transparent; border: 0; border-radius: 4px; }
+.folder-picker button span { flex: 1; overflow-wrap: anywhere; }
+.folder-picker button:hover { background: #ffffff05; }
+.folder-picker button.selected { background: #c8f87a12; color: #d0e5b4; }
+.folder-picker button:focus-visible { outline: 2px solid #c8f87a; outline-offset: -2px; }
+.folder-picker app-icon { width: 15px; height: 15px; }
+mat-dialog-actions { padding: 16px 24px 24px; gap: 6px; }

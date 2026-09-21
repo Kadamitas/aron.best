@@ -35,3 +35,20 @@ jobs:
           node --check deploy/router-mappings.mjs
           node --check deploy/launch-agents.mjs
           node --test deploy/run-service.test.mjs deploy/router-mappings.test.mjs deploy/launch-agents.test.mjs
+      - name: Check container deployment tools
+        run: |
+          node --check scripts/docker-prepare.mjs
+          node --check scripts/docker-state.mjs
+          node --check scripts/docker-invite.mjs
+          node --check scripts/docker-smoke.mjs
+          node --check scripts/docker-ui-smoke.mjs
+          node --check scripts/version-selector-ui-smoke.mjs
+          node --check scripts/saved-servers-ui-smoke.mjs
+          node --check scripts/docker-profiles-smoke.mjs
+          node --test deploy/docker/*.test.mjs
+      - name: Build isolated services
+        run: docker compose build app minecraft caddy
+      - name: Test portable state transfer
+        env:
+          DOCKER_INTEGRATION: 'true'
+        run: node --test deploy/docker/state.test.mjs

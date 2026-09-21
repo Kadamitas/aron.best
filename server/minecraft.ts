@@ -4,6 +4,7 @@ import { access, cp, lstat, mkdir, open, readFile, readdir, rename, rm, statfs, 
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { copyVerifiedFile, downloadArtifact } from './download.js';
+import { readInstalled, type InstalledServer } from './loader-installation.js';
 
 /** A mod to stage: either a CurseForge CDN download or a verified copy from the host's CurseForge App profile. */
 export interface ModDownload { modId: number; fileId: number; fileName: string; url?: string; localPath?: string; hashes: { algo: number; value: string }[]; fileLength: number }
@@ -56,6 +57,7 @@ async function copySnapshot(source: string, destination: string) {
 }
 
 export class MinecraftServer {
+  private installed?: InstalledServer;
   private process?: ChildProcessWithoutNullStreams;
   private state: ServerState = 'not-installed';
   private startedAt?: number;
@@ -67,12 +69,15 @@ export class MinecraftServer {
   private failure: { at: string; message: string; exitCode: number | null; recoveredAt?: string } | null = null;
   private shuttingDown = false;
   private readonly dependencies: MinecraftDependencies;
-  constructor(private readonly options: { directory: string; java: string; memoryMb: number; version: string; address: string; activity: (message: string) => void; onLog?: (line: string) => void; requireOnlineMode?: boolean }, dependencies: Partial<MinecraftDependencies> = {}) {
+  constructor(private readonly options: { directory: string; java: string; javaPaths?: Record<number, string>; loaderVersion?: string; memoryMb: number; version: string; address: string; activity: (message: string) => void; onLog?: (line: string) => void; requireOnlineMode?: boolean }, dependencies: Partial<MinecraftDependencies> = {}) {
     this.dependencies = { ...defaultDependencies, ...dependencies };
   }
 
   async initialize() {
-    try { await access(path.join(this.options.directory, 'fabric-server-launch.jar')); this.state = 'stopped'; } catch { this.state = 'not-installed'; }
+    if (this.process) throw new Error('Stop Minecraft before reloading its installation.');
+    this.installed = await readInstalled(this.options.directory);
+    const launcher = this.installed ? this.installed.launchArgs[0] === '-jar' ? this.installed.launchArgs[1]! : this.installed.launchArgs[0]!.slice(1) : 'fabric-server-launch.jar';
+    try { await access(path.join(this.options.directory, launcher)); this.state = 'stopped'; } catch { this.state = 'not-installed'; }
     const backupsDirectory = path.join(this.options.directory, '..', 'backups');
     const backups = await readdir(backupsDirectory, { withFileTypes: true }).catch(() => []);
     const latest = backups.filter(entry => entry.isDirectory() && !entry.name.startsWith('.')).map(entry => entry.name).sort().at(-1);
@@ -83,8 +88,9 @@ export class MinecraftServer {
       this.lastBackup = Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString() : null;
     }
   }
-  status() { return { state: this.state, version: this.options.version, address: this.options.address, uptimeSeconds: this.startedAt ? Math.floor((Date.now() - this.startedAt) / 1000) : 0, lastBackup: this.lastBackup, busy: this.busy, failure: this.failure }; }
+  status() { return { state: this.state, version: this.installed?.minecraftVersion ?? this.options.version, loader: this.installed?.loader ?? 'Fabric', loaderVersion: this.installed?.loaderVersion ?? this.options.loaderVersion ?? '0.19.5', address: this.options.address, uptimeSeconds: this.startedAt ? Math.floor((Date.now() - this.startedAt) / 1000) : 0, lastBackup: this.lastBackup, busy: this.busy, failure: this.failure }; }
   logs() { return [...this.lines]; }
+  appendLog(line: string) { this.log(line); }
   private recordFailure(message: string, exitCode: number | null = null) { this.failure = { at: new Date().toISOString(), message, exitCode }; }
 
   /** The newest Minecraft crash report, read directly from the server folder and bounded in size. */
@@ -134,6 +140,7 @@ export class MinecraftServer {
     if (this.shuttingDown) throw new Error('The controller is shutting down.');
     if (this.process) throw Object.assign(new Error('The server is already running.'), { statusCode: 409 });
     if (this.state === 'not-installed') throw new Error('Run npm run bootstrap to install the Minecraft server.');
+    this.installed = await readInstalled(this.options.directory);
     const eula = await readFile(path.join(this.options.directory, 'eula.txt'), 'utf8').catch(() => '');
     if (!/^eula=true\s*$/m.test(eula)) throw new Error('The owner must accept the Minecraft EULA locally before starting the server.');
     if (this.options.requireOnlineMode) {
@@ -141,10 +148,12 @@ export class MinecraftServer {
       if (!/^online-mode=true\s*$/m.test(properties) || !/^server-ip=127\.0\.0\.1\s*$/m.test(properties)
         || !/^server-port=25566\s*$/m.test(properties)) throw new Error('Join-based access requires online-mode=true and the private game listener at 127.0.0.1:25566.');
     }
+    const java = this.installed ? this.options.javaPaths?.[this.installed.javaMajor] : this.options.java;
+    if (!java) throw new Error(`Java ${this.installed!.javaMajor} is not configured for this server installation.`);
     this.state = 'starting';
-    const child = this.dependencies.launch(this.options.java, [`-Xms512M`, `-Xmx${this.options.memoryMb}M`, '-jar', 'fabric-server-launch.jar', 'nogui'], {
+    const child = this.dependencies.launch(java, [`-Xms512M`, `-Xmx${this.options.memoryMb}M`, ...(this.installed?.launchArgs ?? ['-jar', 'fabric-server-launch.jar']), 'nogui'], {
       cwd: this.options.directory,
-      env: { PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8', JAVA_HOME: path.resolve(this.options.java, '..', '..') },
+      env: { PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8', JAVA_HOME: path.resolve(java, '..', '..') },
     });
     this.process = child;
     this.startedAt = undefined;

@@ -1,150 +1,102 @@
-<a class="skip-link" href="#workshop-main">Skip to workshop</a>
+<a class="skip-link" href="#workshop-main">Skip to workspace</a>
 <div class="workshop">
-  <header class="workshop-header">
-    <a class="workshop-brand" href="/" aria-label="The Workshop home"><span class="workshop-symbol"><app-icon name="cube"/></span><span>the workshop<span class="brand-subtitle">A WORLD WE BUILD TOGETHER</span></span></a>
-    <div class="workshop-header-right"><span class="invite-status"><app-icon [name]="authorized() ? 'shield' : 'link'"/> {{ authorized() ? 'Friend access' : 'View only' }}</span><button mat-icon-button (click)="refresh()" [disabled]="loading()" aria-label="Refresh workshop status" matTooltip="Refresh status"><app-icon name="refresh"/></button></div>
-  </header>
-
-  <main id="workshop-main" class="workshop-main">
-    @if (connectionError()) {
-      <div class="notice error-notice" role="alert" animate.enter="enter-up"><app-icon name="server"/><div><strong>The workshop is out of reach.</strong><p>{{ connectionError() }}</p>@if (status()) { <small>Showing the last known state. Controls are paused until we reconnect.</small> }</div><button mat-button (click)="refresh()" [disabled]="loading()">Try again</button></div>
-    }
-
-    <section class="workshop-intro" aria-labelledby="workshop-title" animate.enter="enter-up">
-      <div><p class="eyebrow"><span class="status-dot"></span> GOOD FRIENDS. QUESTIONABLE MOD CHOICES.</p><h1 id="workshop-title">Our world.<br><span>Our kind of weird.</span></h1><p class="intro-copy">Find something fun. Send us the link.<br>Let's see what we can build.</p></div>
-      <div class="world-art" aria-hidden="true"><div class="world-orbit"></div><svg viewBox="0 0 300 250"><defs><linearGradient id="island-top" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#d0ed95"/><stop offset="1" stop-color="#a6d56b"/></linearGradient></defs><path d="m50 137 95-55 108 61-95 55Z" fill="url(#island-top)"/><path d="M50 137v34l108 62v-35Z" fill="#6a8855"/><path d="m158 198 95-55v34l-95 56Z" fill="#456346"/><path d="m50 149 108 62 95-55v10l-95 55-108-62Z" fill="#415640" opacity=".5"/><path d="m96 108 18-10 19 11-19 11Z" fill="#9a704b"/><path d="M114 120v37l19-11v-37Z" fill="#70553d"/><path d="m96 108 18 12v37l-18-11Z" fill="#a7784c"/><path d="m70 58 45-26 45 26-45 26Z" fill="#a9d775"/><path d="M70 58v50l45 26V84Z" fill="#739e52"/><path d="m115 84 45-26v50l-45 26Z" fill="#547d47"/><path d="m158 116 25-14 30 17-25 15Z" fill="#e7e7d6"/><path d="M158 116v31l30 17v-30Z" fill="#a9b6a1"/><path d="m188 134 25-15v31l-25 14Z" fill="#7c8e7c"/><path d="m210 56 5 13 13 5-13 5-5 13-5-13-13-5 13-5Z" fill="#c8f87a"/><path d="m69 194 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z" fill="#c8f87a"/></svg><span>EST. WHENEVER WE ALL LOG ON.</span></div>
-    </section>
-
-    @if (loading() && !status()) {
-      <div class="loading-state" role="status"><mat-spinner diameter="30"/><span>Connecting to our world...</span></div>
-    }
-
+  <main id="workshop-main">
+    @if (connectionError()) { <div class="notice error" role="alert"><span>{{ connectionError() }}</span><button mat-button (click)="refresh()">Try again</button></div> }
+    @if (loading() && !status()) { <div class="loading" role="status"><mat-spinner diameter="24"/><span>Loading workspace...</span></div> }
     @if (status(); as current) {
-      @if (!authorized()) {
-        <div class="notice invitation-notice" animate.enter="enter-up"><app-icon name="link"/><div><strong>A little link gets you in.</strong><p>Open your friend invitation once, or join the Minecraft server from this network, and this connection can request mods and run the server. No account needed.</p></div></div>
-      }
-
-      <section class="pack-overview" aria-label="Modpack overview" animate.enter="enter-up">
-        <div class="pack-identity"><span class="pack-icon"><app-icon name="cube"/></span><div><span class="small-label">THE CURRENT PACK</span><h2>{{ current.pack.name || 'Our new modpack' }}</h2></div></div>
-        <dl class="pack-facts"><div><dt>MINECRAFT</dt><dd>{{ current.pack.minecraftVersion || 'Not configured' }}</dd></div><div><dt>LOADER</dt><dd class="capitalize">{{ current.pack.loader || 'Not configured' }}</dd></div><div><dt>DRAFT VERSION</dt><dd>{{ current.pack.version || 'Not configured' }}</dd></div><div><dt>MODS</dt><dd>{{ mods().length | number }}</dd></div></dl>
+      <section class="workspace-title" animate.enter="appear">
+        <div><h1>Dictionary Minecraft Server</h1><div class="installation-controls" [class.dirty]="installationDirty()">
+          <button class="version-label" [matMenuTriggerFor]="minecraftMenu" (menuOpened)="loadInstallationOptions()" [disabled]="!authorized() || !!busy() || workspaceTransitioning()" aria-label="Change Minecraft version">Minecraft {{ installation().minecraftVersion }}<app-icon name="arrow-right"/></button>
+          <span class="version-separator">·</span>
+          <button class="version-label" [matMenuTriggerFor]="loaderMenu" (menuOpened)="loadInstallationOptions()" [disabled]="!authorized() || !!busy() || workspaceTransitioning()" aria-label="Change mod loader">{{ installation().loader }}<small>{{ installation().loaderVersion }}</small><app-icon name="arrow-right"/></button>
+          @if (optionsLoading()) { <mat-spinner diameter="14" aria-label="Loading compatible versions"/> }
+          @if (installationDirty()) { <button class="save-version" mat-flat-button (click)="saveInstallation()" [disabled]="!installationValid() || !writable() || !!busy() || optionsLoading() || !!connectionError()" [matTooltip]="writable() ? 'Back up and apply these versions' : 'Stop this server before changing versions'">{{ busy() === 'installation' || workspaceTransitioning() ? 'Saving...' : 'Save' }}</button><button class="cancel-version" mat-button (click)="resetInstallation()" [disabled]="!!busy() || workspaceTransitioning()">Cancel</button> }
+        </div></div>
+        <div class="download"><button mat-stroked-button (click)="downloadPack()" [disabled]="!downloadReady() || !!busy() || !!connectionError()"><app-icon matButtonIcon name="download"/>Download pack ZIP</button><small>{{ downloadHint() }}</small></div>
       </section>
-
-      <div class="workshop-layout">
-        <section class="workspace-panel" aria-label="Manage the modpack">
-          <mat-tab-group [selectedIndex]="tab()" (selectedIndexChange)="tab.set($event)" animationDuration="220ms" dynamicHeight>
-            <mat-tab [label]="'Mods (' + mods().length + ')'">
-              <div class="tab-content">
-                <div class="tab-heading"><div><p class="small-label">THE POSSIBILITIES ARE ENDLESS</p><h2>What are we playing with?</h2></div><span class="source-label">from the CurseForge App</span></div>
-                <p class="section-description">The pack is whatever the host has installed in the CurseForge App. Found something great? Paste its CurseForge link and it joins the request list. Nothing downloads on its own: the host installs it through the App, then syncs the server.</p>
-
-                <form class="request-form" (submit)="$event.preventDefault(); submitRequest()">
-                  <mat-form-field appearance="outline" subscriptSizing="dynamic"><mat-label>Request a mod by CurseForge link</mat-label><app-icon matPrefix name="link"/><input matInput [formControl]="requestUrl" placeholder="https://www.curseforge.com/minecraft/mc-mods/..." autocomplete="off" maxlength="2048" [readonly]="!authorized()"/></mat-form-field>
-                  <button mat-flat-button type="submit" [disabled]="!authorized() || !!busy() || !!connectionError()">{{ busy() === 'request' ? 'Saving...' : 'Request' }} <app-icon name="plus"/></button>
-                </form>
-                @if (requestUrl.touched && requestUrl.invalid && requestUrl.value) {
-                  <p class="field-hint error-hint" role="alert">Paste a CurseForge Minecraft mod page link, like https://www.curseforge.com/minecraft/mc-mods/fabric-api, or one of its file links.</p>
-                } @else {
-                  <p class="field-hint">Mod pages and specific file links from www.curseforge.com are accepted. Links are stored, never fetched.</p>
-                }
-
-                @if (requests().length) {
-                  <div class="request-list" aria-label="Requested mods">
-                    <h3>Requested <span>{{ pendingRequests().length }} pending</span></h3>
-                    @for (request of requests(); track request.id) {
-                      <article class="request-item" [class.is-installed]="request.status === 'installed'" animate.enter="enter-up"><app-icon [name]="request.status === 'installed' ? 'check' : 'link'"/><div><a [href]="request.url" target="_blank" rel="noopener noreferrer">{{ request.slug }} <app-icon name="arrow-up-right"/></a><p>{{ request.status === 'installed' ? 'Installed in the pack' : 'Waiting for the host to install it through the App' }} · {{ request.submittedAt | date:'mediumDate' }}</p></div></article>
-                    }
-                  </div>
-                }
-
-                <div class="mod-group-heading">
-                  <mat-form-field appearance="outline" class="search-field" subscriptSizing="dynamic"><mat-label>Filter installed and previous mods</mat-label><app-icon matPrefix name="search"/><input matInput [formControl]="search" placeholder="Try backpacks, magic, or create" autocomplete="off" maxlength="100"/>@if (search.value) { <button matSuffix mat-icon-button (click)="search.setValue('')" aria-label="Clear filter"><app-icon name="close"/></button> }</mat-form-field>
-                  @if (authorized()) {
-                    <div class="host-actions">
-                      <button mat-stroked-button (click)="importProfile()" [disabled]="!current.capabilities.localProfile || !!busy() || !!connectionError()" matTooltip="Read the host's CurseForge App profile into the draft">{{ busy() === 'import-profile' ? 'Importing...' : 'Import App profile' }} <app-icon name="download"/></button>
-                      <button mat-flat-button (click)="act('sync-profile')" [disabled]="!current.capabilities.localProfile || !serverReady() || !!busy() || serverTransitioning() || !!connectionError()" matTooltip="Back up the world and install the verified App profile on the server">Sync App pack <app-icon name="refresh"/></button>
-                    </div>
-                  }
-                </div>
-                @if (authorized() && !current.capabilities.localProfile) { <div class="inline-notice"><app-icon name="link"/><p>Importing and syncing need the host's CurseForge App profile path configured on the laptop. Until then the list below shows the last imported pack.</p></div> }
-
-                <h3 class="mod-group-title">Installed now <span>{{ filteredMods().length }}</span></h3>
-                @if (!mods().length) {
-                  <div class="empty-state"><span class="empty-icon"><app-icon name="cube"/></span><h3>A fresh start.</h3><p>No mods in the pack yet. Request the first one and make this world our own.</p></div>
-                } @else if (!filteredMods().length) {
-                  <p class="quiet-empty">No installed mods match that filter.</p>
-                }
-                <div class="mod-results" aria-live="polite">
-                  @for (mod of filteredMods(); track mod.id) {
-                    <article class="mod-card selected-mod" animate.enter="enter-up" animate.leave="leave"><div class="mod-avatar">@if (mod.logoUrl) { <img [src]="mod.logoUrl" alt="" loading="lazy" referrerpolicy="no-referrer"/> } @else { <app-icon name="cube"/> }</div><div class="mod-info"><h3>@if (mod.websiteUrl) { <a [href]="mod.websiteUrl" target="_blank" rel="noopener noreferrer">{{ mod.name }} <app-icon name="arrow-up-right"/></a> } @else { {{ mod.name }} }</h3><p>{{ mod.summary }}</p><span class="mod-metadata"><app-icon name="check"/> {{ mod.version || 'Installed file' }} @if (mod.fileId) { <span>· File {{ mod.fileId }}</span> }</span></div></article>
-                  }
-                </div>
-
-                @if (history().length) {
-                  <h3 class="mod-group-title history-title">Previously installed <span>{{ filteredHistory().length }}</span></h3>
-                  @if (!filteredHistory().length) { <p class="quiet-empty">No previous mods match that filter.</p> }
-                  <div class="mod-results history-results" aria-label="Previously installed mods">
-                    @for (mod of filteredHistory(); track mod.id) {
-                      <article class="mod-card history-card" animate.enter="enter-up" animate.leave="leave"><div class="mod-avatar">@if (mod.logoUrl) { <img [src]="mod.logoUrl" alt="" loading="lazy" referrerpolicy="no-referrer"/> } @else { <app-icon name="cube"/> }</div><div class="mod-info"><h3>@if (mod.websiteUrl) { <a [href]="mod.websiteUrl" target="_blank" rel="noopener noreferrer">{{ mod.name }} <app-icon name="arrow-up-right"/></a> } @else { {{ mod.name }} }</h3><p>{{ mod.summary }}</p><span class="mod-metadata">Removed {{ mod.removedAt | date:'mediumDate' }} @if (mod.version) { <span>· was {{ mod.version }}</span> }</span></div></article>
-                    }
-                  </div>
-                }
-              </div>
-            </mat-tab>
-
-            <mat-tab label="Releases">
-              <div class="tab-content"><div class="tab-heading"><div><p class="small-label">READY WHEN WE ARE</p><h2>Send it into the world.</h2></div><app-icon name="spark"/></div><p class="section-description">Publish the pack to CurseForge so everyone can install the same version.</p>
-                <div class="inline-notice"><app-icon name="link"/><p>CurseForge requires an unchanged App export. Before publishing, the host must export a matching profile in the CurseForge App and configure that ZIP. The draft manifest alone is not a publishable pack.</p></div>
-                @if (!current.capabilities.publish) { <div class="inline-notice"><app-icon name="link"/><p>Publishing also needs an owned CurseForge project and author upload token. These are not connected yet.</p></div> }
-                <form class="release-form" (submit)="$event.preventDefault(); publish()"><mat-form-field appearance="outline"><mat-label>Release name</mat-label><input matInput [formControl]="displayName" placeholder="Our first adventure" maxlength="100"/>@if (displayName.touched && displayName.hasError('required')) { <mat-error>Give this release a name.</mat-error> }</mat-form-field><mat-form-field appearance="outline"><mat-label>What changed?</mat-label><textarea matInput [formControl]="changelog" rows="4" placeholder="New mods, fixes, and anything the group should know." maxlength="5000"></textarea>@if (changelog.touched && changelog.hasError('required')) { <mat-error>Add a short note for your friends.</mat-error> }</mat-form-field><div class="release-form-footer"><span>{{ mods().length }} mods in this draft</span><div class="release-form-buttons"><button mat-stroked-button type="button" (click)="exportPack()" [disabled]="!authorized() || !!busy() || !mods().length || !!connectionError()">Export manifest <app-icon name="download"/></button><button mat-flat-button type="submit" [disabled]="!authorized() || !current.capabilities.publish || !!busy() || !mods().length || !!connectionError()">{{ busy() === 'publish' ? 'Publishing...' : 'Publish release' }} <app-icon name="arrow-up-right"/></button></div></div></form>
-                <div class="release-history"><h3>Release history <span>{{ releases().length }}</span></h3>@if (!releases().length) { <p class="quiet-empty">No releases yet. Every great world starts somewhere.</p> } @for (release of releases(); track $index) { <article class="release-item"><span class="release-marker"><app-icon name="cube"/></span><div><h4>{{ release.displayName || release.version || 'Modpack release' }}</h4><p>{{ release.createdAt ? (release.createdAt | date:'mediumDate') : 'Date unavailable' }} @if (release.status) { <span>· {{ release.status }}</span> }</p>@if (release.changelog) { <p class="release-notes">{{ release.changelog }}</p> }</div>@if (release.url) { <a mat-icon-button [href]="release.url" target="_blank" rel="noopener noreferrer" aria-label="View release on CurseForge"><app-icon name="arrow-up-right"/></a> }</article> }</div>
-              </div>
-            </mat-tab>
-
-            <mat-tab label="Server logs">
-              <div class="tab-content"><div class="tab-heading"><div><p class="small-label">UNDER THE SURFACE</p><h2>The latest from the server.</h2></div><button mat-icon-button (click)="loadLogs()" [disabled]="!authorized() || !!connectionError()" aria-label="Refresh server logs"><app-icon name="refresh"/></button></div><p class="section-description">Recent output from the Minecraft process. Logs are available to invited friends.</p>@if (logsError()) { <p class="search-error" role="alert">{{ logsError() }}</p> } @if (!logsLoaded()) { <div class="empty-state"><span class="empty-icon"><app-icon name="terminal"/></span><h3>A look behind the blocks.</h3><p>Load the latest logs to check startup, updates, or a problem with a mod.</p><button mat-stroked-button (click)="loadLogs()" [disabled]="!authorized() || !!connectionError()">Load server logs</button></div> } @else { <pre class="server-logs" tabindex="0" aria-label="Minecraft server log output">{{ logs().length ? logs().join('\n') : 'No server output yet.' }}</pre> }</div>
-            </mat-tab>
-          </mat-tab-group>
+      @if (current.profiles; as saved) {
+        <section class="saved-servers" aria-label="Saved servers">
+          <span class="saved-label">Editing</span>
+          <button class="profile-choice" mat-stroked-button [matMenuTriggerFor]="profileMenu" [disabled]="!workspaceReady()" aria-label="Select saved server"><app-icon name="server"/><span>{{ workspaceProfile()?.name || 'Current server' }}</span><app-icon class="profile-chevron" name="arrow-down"/></button>
+          @if (workspaceId() !== saved.activeId) { <button class="set-active" mat-stroked-button (click)="setActiveProfile()" [disabled]="!profilesReady()">Set active</button> } @else { <span class="active-badge">Active</span> }
+          <span class="profile-count">{{ saved.profiles.length }} / {{ saved.limit }}</span>
+          <button class="new-server" mat-button (click)="createProfile()" [disabled]="!canCreateProfile()" [matTooltip]="saved.profiles.length >= saved.limit ? 'Delete a saved server to make room' : 'Create a blank server and keep this one'"><app-icon matButtonIcon name="plus"/>New server</button>
+          <button class="manage-servers" mat-icon-button [matMenuTriggerFor]="manageProfilesMenu" [disabled]="!profilesReady()" aria-label="Manage saved servers"><span aria-hidden="true">⋯</span></button>
         </section>
-
-        <aside class="world-sidebar">
-          <section class="server-card" aria-labelledby="server-card-title">
-            <div class="card-title"><span class="small-label" id="server-card-title">OUR LITTLE CORNER OF THE INTERNET</span><app-icon name="server"/></div>
-            <div class="server-status"><span class="server-status-dot" [class.is-online]="serverRunning()" [class.is-transitioning]="serverTransitioning()"></span><h2 class="capitalize">{{ current.server.state || 'Unknown' }}</h2></div>
-            <p class="server-description">{{ serverTransitioning() ? 'Getting things ready. Hang tight.' : serverRunning() ? 'The world is waiting. Come on in.' : current.server.failure ? 'The server went down and needs a look.' : 'A little quiet. The next adventure can wait.' }}</p>
-            @if (current.server.failure; as failure) {
-              <div class="server-trouble" [class.is-recovered]="failure.recoveredAt && serverRunning()" [attr.role]="failure.recoveredAt && serverRunning() ? 'status' : 'alert'">
-                <div><app-icon name="server"/><div><strong>{{ current.server.state === 'failed' ? 'The server is not running.' : failure.recoveredAt ? 'A recent start failed, then the server recovered.' : 'The last run ended badly.' }}</strong><p>{{ failure.message }}</p><time>{{ failure.at | date:'MMM d, h:mm a' }}</time></div></div>
-                @if (current.server.crashLog?.length) {
-                  <button mat-button class="crash-log-toggle" (click)="showCrashLog.set(!showCrashLog())">{{ showCrashLog() ? 'Hide the crash log' : 'Show the latest crash log' }}</button>
-                  @if (showCrashLog()) { <pre class="crash-log" tabindex="0" aria-label="Latest Minecraft crash log">{{ current.server.crashLog!.join('\n') }}</pre> }
-                } @else if (!authorized()) {
-                  <p class="crash-log-toggle">Friends with access can read the crash log here.</p>
-                }
-              </div>
-            }
-            <div class="server-address"><div><span class="small-label">SERVER ADDRESS</span><code>{{ current.server.address || 'mc.aron.best' }}</code></div><button mat-icon-button (click)="copyAddress()" aria-label="Copy Minecraft server address" matTooltip="Copy address"><app-icon name="copy"/></button></div>
-            <dl class="server-facts"><div><dt>Uptime</dt><dd>{{ uptime() }}</dd></div><div><dt>Installed version</dt><dd>{{ current.server.state === 'not-installed' ? 'Not installed' : current.server.version || 'Not installed' }}</dd></div><div><dt>Last backup</dt><dd>{{ lastBackup() ? (lastBackup() | date:'MMM d, h:mm a') : current.server.lastBackup ? 'Backup available' : 'No backup yet' }}</dd></div></dl>
-            @if (!current.capabilities.server) { <p class="server-setup-note">The host is finishing server setup. Controls will be ready when it is configured.</p> }
-            <div class="server-primary-actions">@if (!serverRunning()) { <button mat-flat-button (click)="act('start')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()">Start server <app-icon name="play"/></button> } @else { <button mat-flat-button (click)="act('restart')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()">Restart server <app-icon name="refresh"/></button> }<button mat-stroked-button (click)="act('stop')" [disabled]="!serverReady() || !!busy() || !serverRunning() || !!connectionError()" aria-label="Stop Minecraft server" matTooltip="Stop server"><app-icon name="stop"/></button></div><div class="server-secondary-actions"><button mat-button (click)="act('backup')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()"><app-icon name="backup"/> Back up</button><button mat-button (click)="act('sync-profile')" [disabled]="!serverReady() || !current.capabilities.localProfile || !!busy() || serverTransitioning() || !!connectionError()"><app-icon name="download"/> Sync App pack</button></div>@if (authorized() && !current.capabilities.localProfile) { <p class="server-setup-note">Syncing will be available once the host configures the CurseForge App profile path on the laptop.</p> }@if (busy().startsWith('server:')) { <div class="action-progress" role="status"><mat-spinner diameter="16"/><span>Working on it...</span></div> }
+      }
+      @if (profileProgress(); as progress) { <div class="notice profile-progress" role="status" aria-live="polite"><mat-spinner diameter="20" aria-hidden="true"/><div><strong>{{ progress }}</strong><span>{{ profileOperation()?.kind === 'create' ? 'Installing server files. This can take a few minutes.' : profileOperation()?.kind === 'select' ? 'Saving the current server before switching. The selected server will stay stopped.' : 'Please wait while the server finishes.' }}</span></div></div> }
+      @if (optionsError()) { <div class="notice error" role="alert"><span>{{ optionsError() }}</span><button mat-button (click)="loadInstallationOptions(installation().minecraftVersion, installationDirty())">Try again</button></div> }
+      @if (workspaceServer()?.installationError; as error) { <div class="notice error" role="alert"><div><strong>Version change failed.</strong> {{ error }}</div></div> }
+      @if (profileOperationError() || (!profileOperation() && current.server.profileError); as error) { <div class="notice error" role="alert"><div><strong>Saved server change failed.</strong> {{ error }}</div></div> }
+      @if (!authorized()) { <div class="notice">Open your invite link or join the Minecraft server to access this workspace.</div> }
+      <section class="server-strip" aria-label="Server controls">
+        <div class="active-server"><span class="active-server-name">Active: {{ activeProfile()?.name || 'Current server' }}</span><div class="server-state"><i [class.online]="serverRunning()" [class.working]="serverTransitioning()"></i><strong>{{ serverTransitioning() ? 'Working' : current.server.state }}</strong><span>{{ uptime() }}</span></div></div>
+        <button class="address" (click)="copyAddress()" matTooltip="Copy server address"><code>{{ current.server.address || 'mc.aron.best' }}</code><app-icon name="copy"/></button>
+        <div class="server-buttons">@if (serverRunning()) { <button mat-flat-button (click)="act('restart')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()">Restart</button> } @else { <button mat-flat-button (click)="act('start')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()"><app-icon matButtonIcon name="play"/>Start</button> }<button mat-stroked-button (click)="act('stop')" [disabled]="!serverReady() || !!busy() || !serverRunning() || serverTransitioning() || !!connectionError()">Stop</button><button mat-button (click)="act('backup')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()">Back up</button></div>
+      </section>
+      @if (current.server.failure; as failure) { <div class="notice error"><div><strong>{{ failure.message }}</strong>@if (current.server.crashLog?.length) { <button mat-button (click)="showCrashLog.set(!showCrashLog())">{{ showCrashLog() ? 'Hide crash log' : 'Show crash log' }}</button>@if (showCrashLog()) { <pre>{{ current.server.crashLog!.join('\n') }}</pre> } }</div></div> }
+      <mat-tab-group class="workspace-tabs" [selectedIndex]="tab()" (selectedIndexChange)="tab.set($event)" animationDuration="180ms" preserveContent>
+        <mat-tab label="Basic">
+          <section class="mods-panel">
+            <div class="section-heading"><div><h2>Server mods <span class="count">{{ serverMods().length }}</span></h2><p>{{ enabledCount() }} enabled · Changes apply when the server starts.</p></div><button mat-flat-button (click)="openAddMod(addModDialog)" [disabled]="!writable() || !!busy() || !!connectionError()"><app-icon matButtonIcon name="plus"/>Add mod</button></div>
+            @if (!writable()) { <p class="write-hint"><app-icon name="shield"/>{{ writeHint() }}</p> }
+            @if (modsError()) { <div class="notice error" role="alert">{{ modsError() }}<button mat-button (click)="loadServerMods()">Retry</button></div> }
+            <mat-form-field appearance="outline" class="search" subscriptSizing="dynamic"><mat-label>Search mods</mat-label><app-icon matPrefix name="search"/><input matInput [formControl]="search" autocomplete="off" maxlength="100"/>@if (search.value) { <button mat-icon-button matSuffix (click)="search.setValue('')" aria-label="Clear search"><app-icon name="close"/></button> }</mat-form-field>
+            <div class="mod-list" aria-live="polite">
+              @for (mod of filteredServerMods(); track mod.path) {
+                <article class="mod-row" [class.disabled]="!mod.enabled"><span class="file-icon"><app-icon name="cube"/></span><div class="mod-info"><h3>{{ mod.name }}</h3><p><span class="state" [class.enabled]="mod.enabled">{{ mod.enabled ? 'Enabled' : 'Disabled' }}</span><span>{{ fileSize(mod.size) }}</span></p></div><div class="mod-actions"><button mat-stroked-button (click)="changeMod(mod, mod.enabled ? 'disable' : 'enable')" [disabled]="!writable() || !!busy() || !!connectionError()">{{ mod.enabled ? 'Disable' : 'Enable' }}</button><button mat-button (click)="changeMod(mod, 'uninstall')" [disabled]="!writable() || !!busy() || !!connectionError()">Uninstall</button></div></article>
+              } @empty { <div class="empty"><app-icon name="cube"/><p>{{ search.value ? 'No server mods match this search.' : 'No mod files are installed on this server.' }}</p></div> }
+            </div>
           </section>
-
-          @if (authorized() && activity().length) {
-            <section class="activity-card" aria-label="Recent workshop activity">
-              <span class="small-label">RECENT ACTIVITY</span>
-              <ol>
-                @for (event of activity(); track $index) {
-                  <li><p>{{ event.message }}</p>@if (event.timestamp) { <time>{{ event.timestamp | date:'h:mm a' }}</time> }</li>
-                }
-              </ol>
-            </section>
-          }
-
-          <section class="how-it-works"><span class="small-label">FROM LINK TO SERVER</span><ol><li><span>01</span><div><h3>Request mods.</h3><p>Paste a CurseForge link. It is saved as a request, not downloaded.</p></div></li><li><span>02</span><div><h3>The host installs.</h3><p>Compatible mods go in through the CurseForge App, then the profile is imported here.</p></div></li><li><span>03</span><div><h3>Sync and play.</h3><p>Sync backs up the world, verifies every file, and restarts the server. Install the same pack on your client.</p></div></li></ol></section>
-          <p class="sidebar-footnote"><app-icon name="shield"/> A shared space for friends.<br>Keep your invitation link between us.</p>
-        </aside>
-      </div>
+        </mat-tab>
+        <mat-tab label="Advanced"><ng-template matTabContent>@for (key of workspaceKeys(); track key) { <app-advanced-workshop [status]="current" (changed)="refresh(false)"/> }</ng-template></mat-tab>
+        <mat-tab label="Server Log">
+          <section class="logs-panel" aria-labelledby="logs-title"><div class="section-heading"><div class="log-title"><app-icon name="terminal"/><h2 id="logs-title">{{ activeProfile()?.name || 'Server' }} log</h2><span>Active server · Refreshes every 15s</span></div><button mat-icon-button (click)="loadLogs()" [disabled]="!authorized() || logsLoading() || !!connectionError()" aria-label="Refresh logs"><app-icon name="refresh"/></button></div>@if (logsError()) { <p class="error-text" role="alert">{{ logsError() }}</p> }<pre tabindex="0" aria-label="Minecraft server log output">{{ logs().length ? logs().join('\n') : logsLoading() ? 'Loading output...' : 'No server output yet.' }}</pre></section>
+        </mat-tab>
+      </mat-tab-group>
+      <footer><span>Last backup: {{ lastBackup() ? (lastBackup() | date:'MMM d, h:mm a') : 'None yet' }}</span><span>Aron.best</span></footer>
     }
-    @if (!status() && !loading()) { <div class="offline-empty"><span class="empty-icon"><app-icon name="server"/></span><h2>Every world needs a home.</h2><p>The workshop service is not available yet. Once the host starts it, the modpack and server controls will appear here.</p><button mat-stroked-button (click)="refresh()">Check connection <app-icon name="refresh"/></button></div> }
   </main>
-  <footer class="workshop-footer"><span>THE WORKSHOP</span><span>Less setup. More getting lost together.</span><span>mc.aron.best</span></footer>
 </div>
+<mat-menu #profileMenu="matMenu" class="saved-profile-menu">
+  @for (profile of status()?.profiles?.profiles ?? []; track profile.id) {
+    <button mat-menu-item (click)="selectProfile(profile)" [class.selected-profile]="profile.id === workspaceId()" [attr.aria-label]="'Edit ' + profile.name"><span class="profile-menu-copy"><strong>{{ profile.name }}</strong><small>Minecraft {{ profile.minecraftVersion }} · {{ profile.loader }}@if (profile.id === activeProfile()?.id) { <span> · Active</span> }@if (profile.id === workspaceId()) { <span> · Editing</span> }</small></span>@if (profile.id === workspaceId()) { <app-icon name="check"/> }</button>
+  }
+</mat-menu>
+<mat-menu #manageProfilesMenu="matMenu">
+  @for (profile of status()?.profiles?.profiles ?? []; track profile.id) { <button mat-menu-item [matMenuTriggerFor]="profileActionsMenu" [matMenuTriggerData]="{ profile }">{{ profile.name }}</button> }
+</mat-menu>
+<mat-menu #profileActionsMenu="matMenu">
+  <ng-template matMenuContent let-profile="profile">
+    <button mat-menu-item (click)="renameProfile(profile)">Rename</button>
+    <button mat-menu-item (click)="removeProfile(profile)" [disabled]="profile.id === activeProfile()?.id" aria-label="Delete"><span>Delete</span>@if (profile.id === activeProfile()?.id) { <small class="menu-hint">Set another server active first</small> }</button>
+  </ng-template>
+</mat-menu>
+<mat-menu #minecraftMenu="matMenu">
+  @if (optionsLoading() && !minecraftVersions().length) { <button mat-menu-item disabled>Loading Minecraft versions...</button> }
+  @for (version of minecraftVersions(); track version) { <button mat-menu-item (click)="chooseMinecraft(version)" [disabled]="optionsLoading()" [class.selected-version]="version === installation().minecraftVersion"><span>Minecraft {{ version }}</span>@if (version === installation().minecraftVersion) { <app-icon name="check"/> }</button> }
+  @if (optionsError() && !minecraftVersions().length) { <button mat-menu-item disabled>Versions could not be loaded.</button> }
+</mat-menu>
+<mat-menu #loaderMenu="matMenu">
+  @if (optionsLoading()) { <button mat-menu-item disabled>Finding compatible loaders...</button> } @else {
+    @for (choice of loaderChoices(); track choice.loader + choice.loaderVersion) { <button mat-menu-item (click)="chooseLoader(choice)" [class.selected-version]="choice.loader === installation().loader && choice.loaderVersion === installation().loaderVersion"><span>{{ choice.loader }} <small>{{ choice.loaderVersion }}</small></span>@if (choice.loader === installation().loader && choice.loaderVersion === installation().loaderVersion) { <app-icon name="check"/> }</button> }
+    @if (!loaderChoices().length) { <button mat-menu-item disabled>No compatible loaders found.</button> }
+  }
+</mat-menu>
+<ng-template #addModDialog>
+  <h2 mat-dialog-title>Add mod</h2>
+  <mat-dialog-content class="add-mod-content">
+    <p>Choose the mod's .jar file. It will be added directly to this saved server.</p>
+    <p class="compatibility">Use mods for Minecraft {{ status()?.pack?.minecraftVersion }} and {{ status()?.pack?.loader }}.</p>
+    <input #modUpload type="file" accept=".jar" multiple hidden (change)="chooseMods($event)"/>
+    <button class="choose-mods" mat-stroked-button (click)="modUpload.click()" [disabled]="!!busy()"><app-icon matButtonIcon name="plus"/>{{ selectedMods().length ? 'Choose different files' : 'Choose .jar files' }}</button>
+    @if (selectedMods().length) {
+      <ul class="selected-mods">
+        @for (file of selectedMods(); track file.name) { <li><app-icon name="cube"/><span>{{ file.name }}</span><small>{{ fileSize(file.size) }}</small></li> }
+      </ul>
+    }
+    @if (addModError()) { <p class="add-error" role="alert">{{ addModError() }}</p> }
+    @if (busy() === 'install') { <p class="add-progress" role="status"><mat-spinner diameter="18"/>Adding mod files... {{ uploadProgress() }}%</p> }
+  </mat-dialog-content>
+  <mat-dialog-actions align="end"><button mat-button mat-dialog-close [disabled]="!!busy()">Cancel</button><button mat-flat-button (click)="addMods()" [disabled]="!selectedMods().length || !writable() || !!busy()">{{ selectedMods().length > 1 ? 'Add mods' : 'Add mod' }}</button></mat-dialog-actions>
+</ng-template>

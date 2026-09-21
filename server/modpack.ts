@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { fromBuffer, type Entry } from 'yauzl';
 import { z } from 'zod';
 import { CurseForgeClient, CurseForgeError, isCompatible, loaderSchema, type CurseMod, type Download, type Loader } from './curseforge.js';
+import { workspaceArchive } from './workspace-archive.js';
 
 const id = z.number().int().positive();
 const modSchema = z.object({
@@ -242,7 +243,7 @@ export class PackService {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
           throw new CurseForgeError('PACK_STATE_INVALID', 'The saved pack state could not be read. Preserve it and repair or restore the local backup.', 503);
         }
-        this.state = packSchema.parse({ name: this.options.name ?? 'The After Hours Pack', minecraftVersion: this.options.minecraftVersion,
+        this.state = packSchema.parse({ name: this.options.name ?? 'Dictionary Minecraft Server', minecraftVersion: this.options.minecraftVersion,
           loader: this.options.loader, loaderVersion: this.options.loaderVersion ?? (this.options.loader === 'Fabric' ? '0.19.5' : ''),
           version: '0.1.0', mods: [], releases: [] });
       }
@@ -383,6 +384,12 @@ export class PackService {
     return { minecraft: { version: pack.minecraftVersion, modLoaders: [{ id: `${pack.loader.toLowerCase()}-${pack.loaderVersion}`, primary: true }] },
       manifestType: 'minecraftModpack', manifestVersion: 1, name: pack.name, version: pack.version, author: 'Aron',
       files: pack.mods.map((mod) => ({ projectID: mod.id, fileID: mod.fileId, required: true })), overrides: 'overrides' };
+  }
+
+  async exportArchive(): Promise<Buffer> {
+    const manifest = await this.exportManifest();
+    const contents = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    return workspaceArchive([['manifest.json', contents]]);
   }
 
   private async resolveFiles(files: { projectID: number; fileID: number }[], pack: Pack): Promise<Download[]> {

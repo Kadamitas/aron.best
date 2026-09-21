@@ -1,0 +1,8 @@
+<header><div><h2 mat-dialog-title>{{ file().name }}</h2><p>{{ file().path }}</p></div><button mat-icon-button (click)="close()" [disabled]="busy()" aria-label="Close editor"><app-icon name="close"/></button></header>
+<mat-dialog-content>
+  @if (!writable()) { <p class="read-only">Read only while the server is running. Stop it before saving changes.</p> }
+  @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+  <textarea class="code-editor" [value]="contents()" (input)="edit($event)" (keydown)="keydown($event)" [readOnly]="!writable() || busy()" [attr.aria-label]="'Contents of ' + file().path" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+  <div class="editor-status"><span>{{ file().revision === 'new' ? 'New file' : 'Updated ' + (file().modifiedAt | date:'MMM d, h:mm a') }}</span><span role="status">{{ dirty() ? 'Unsaved changes' : saved() ? 'Saved' : 'UTF-8' }}</span></div>
+</mat-dialog-content>
+<mat-dialog-actions><span class="shortcut">Ctrl / ⌘ S to save</span><button mat-button (click)="reload()" [disabled]="busy() || file().revision === 'new'">Reload</button><button mat-flat-button (click)="save()" [disabled]="!writable() || !dirty() || busy()">{{ busy() ? 'Working...' : 'Save' }}</button></mat-dialog-actions>

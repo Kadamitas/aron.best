@@ -1,0 +1,23 @@
+<h2 mat-dialog-title>{{ title }}</h2>
+<form (submit)="$event.preventDefault(); submit()">
+  <mat-dialog-content>
+    @if (data.mode === 'delete') {
+      <p>Are you sure you want to delete <strong>{{ name }}</strong>?</p>
+      <p class="path">{{ data.path }}</p>
+      @if (data.directory) { <p class="warning">Everything inside this folder will also be removed from the server.</p> }
+    } @else if (data.mode === 'move') {
+      <p>Where should <strong>{{ name }}</strong> go?</p>
+      <div class="folder-picker" aria-label="Choose a folder">
+        @for (path of folders; track path) { <button type="button" [class.selected]="folder() === path" [style.--depth]="depth(path)" [attr.aria-pressed]="folder() === path" [attr.aria-label]="'Move into ' + path" (click)="folder.set(path)" [disabled]="busy()"><app-icon name="folder"/><span>{{ path }}</span>@if (folder() === path) { <app-icon name="check"/> }</button> }
+      </div>
+      <p class="path">Selected: {{ folder() }}</p>
+    } @else {
+      <p class="path">In {{ data.mode === 'rename' ? parent : data.path }}</p>
+      <mat-form-field appearance="outline" subscriptSizing="dynamic"><mat-label>{{ data.mode === 'rename' ? 'New name' : data.mode === 'create-folder' ? 'Folder name' : 'File name' }}</mat-label><input matInput [formControl]="nameInput" maxlength="200" [readonly]="busy()" autocomplete="off" [placeholder]="data.mode === 'create-file' ? 'notes.md' : ''"/></mat-form-field>
+      @if (data.mode === 'create-file') { <p class="hint">Include the extension you want, such as notes.md or notes.whatever. The file opens in the editor before you save it.</p> }
+      @if (nameInput.value && !valid() && !(data.mode === 'rename' && nameInput.value === name)) { <p class="warning">Use a name without slashes or a leading dot.</p> }
+    }
+    @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+  </mat-dialog-content>
+  <mat-dialog-actions align="end"><button mat-button type="button" (click)="dialog.close()" [disabled]="busy()">Cancel</button><button mat-flat-button type="submit" [disabled]="!valid() || busy()">{{ busy() ? 'Working...' : action }}</button></mat-dialog-actions>
+</form>

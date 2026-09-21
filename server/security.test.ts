@@ -44,3 +44,15 @@ test('artifact downloads reject local, insecure and disguised hosts', () => {
   for (const url of ['http://edge.forgecdn.net/mod.jar', 'https://127.0.0.1/mod.jar', 'https://edge.forgecdn.net.attacker.test/mod.jar', 'https://edge.forgecdn.net:444/mod.jar', 'https://user:pass@edge.forgecdn.net/mod.jar']) assert.throws(() => validateArtifactUrl(url));
   assert.equal(validateArtifactUrl('https://edge.forgecdn.net/files/mod.jar').hostname, 'edge.forgecdn.net');
 });
+
+test('request throttling reports 429 instead of an internal server error', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'aron-rate-limit-'));
+  const app = await createApp(readConfiguration({ NODE_ENV: 'test', RUNTIME_DIRECTORY: directory }));
+  try {
+    for (let index = 0; index < 90; index++) assert.equal((await app.inject({ url: '/api/health' })).statusCode, 200);
+    const limited = await app.inject({ url: '/api/health' });
+    assert.equal(limited.statusCode, 429);
+    assert.equal(limited.json().error, 'Too many requests. Try again in a minute.');
+    assert(Number(limited.headers['retry-after']) > 0);
+  } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
+});

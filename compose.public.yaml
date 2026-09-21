@@ -1,0 +1,12 @@
+services:
+  app:
+    environment:
+      PUBLIC_ORIGIN: https://${WORKSHOP_HOST:-mc.modpack.aron.best}
+  minecraft:
+    ports: !override
+      - target: 25565
+        published: "${MINECRAFT_PUBLIC_PORT:-25565}"
+        host_ip: ${MINECRAFT_BIND_ADDRESS:-0.0.0.0}
+        protocol: tcp
+  caddy:
+    profiles: !reset []

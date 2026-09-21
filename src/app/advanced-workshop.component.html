@@ -1,0 +1,43 @@
+<section class="advanced">
+  <div class="section-heading"><div><h2>Server files</h2><p>Open a folder, then add or edit its files.</p></div><div class="heading-actions"><button mat-icon-button [matMenuTriggerFor]="entryMenu" [matMenuTriggerData]="{ entry: null }" [disabled]="!writable() || !!busy()" aria-label="Folder actions"><span class="ellipsis" aria-hidden="true">⋯</span></button><button mat-icon-button (click)="refresh()" [disabled]="loading() || !!busy()" aria-label="Refresh files"><app-icon name="refresh"/></button></div></div>
+  @if (!writable()) { <p class="write-hint"><app-icon name="shield"/>{{ status().capabilities.workspaceWrite ? 'This saved server must be stopped and idle to change files. You can still browse and download.' : 'File changes need the isolated server. You can still browse and download.' }}</p> }
+  @if (error()) { <div class="error" role="alert"><span>{{ error() }}</span><button mat-icon-button (click)="error.set('')" aria-label="Dismiss error"><app-icon name="close"/></button></div> }
+  <div class="workspace">
+    <nav class="folders" aria-label="Server folders">
+      <p>FOLDERS</p>
+      <div class="folder-tree" role="tree" aria-label="Folders">
+        @for (folder of folderTree(); track folder.path) {
+          <div class="folder-node" role="treeitem" tabindex="0" [attr.data-path]="folder.path" [attr.aria-label]="folder.path" [attr.aria-level]="folder.depth + 1" [attr.aria-selected]="directory() === folder.path" [attr.aria-expanded]="folder.hasChildren ? folder.expanded : null" [class.selected]="directory() === folder.path" [style.--depth]="folder.depth" (click)="navigate(folder.path)" (keydown)="folderKey($event, folder)" [matContextMenuTriggerFor]="entryMenu" [matContextMenuTriggerData]="{ entry: folder }" (contextmenu)="$event.stopPropagation()">
+            @if (folder.hasChildren) { <button class="folder-toggle" tabindex="-1" (click)="toggleFolder(folder.path, $event)" [attr.aria-label]="(folder.expanded ? 'Collapse ' : 'Expand ') + folder.path"><app-icon [class.expanded]="folder.expanded" name="arrow-right"/></button> } @else { <span class="folder-toggle-spacer"></span> }
+            <app-icon class="folder-icon" name="folder"/><span class="folder-label">{{ folder.name }}</span>
+            <button class="folder-menu" [matMenuTriggerFor]="entryMenu" [matMenuTriggerData]="{ entry: folder }" (click)="$event.stopPropagation()" (keydown)="$event.stopPropagation()" [attr.aria-label]="'Options for folder ' + folder.path"><span aria-hidden="true">⋯</span></button>
+          </div>
+        }
+      </div>
+    </nav>
+    <div class="file-browser" [class.dragging]="dragging()" (dragover)="dragOver($event)" (dragleave)="dragging.set(false)" (drop)="drop($event)">
+      <div class="browser-toolbar"><nav class="breadcrumbs" aria-label="Current folder">@for (crumb of breadcrumbs(); track crumb.path) { @if (!$first) { <span>/</span> }<button (click)="navigate(crumb.path)" [attr.aria-current]="$last ? 'location' : null">{{ crumb.name }}</button> }</nav><span class="file-count">{{ entries().length }} items</span></div>
+      <mat-form-field class="file-search" appearance="outline" subscriptSizing="dynamic"><mat-label>Search files and folders</mat-label><app-icon matPrefix name="search"/><input matInput [formControl]="search" maxlength="100"/>@if (search.value) { <button matSuffix mat-icon-button (click)="search.setValue('')" aria-label="Clear file search"><app-icon name="close"/></button> }</mat-form-field>
+      <div class="file-table" tabindex="0" aria-label="Files. Right-click empty space to create a file or folder." [matContextMenuTriggerFor]="entryMenu" [matContextMenuTriggerData]="{ entry: null }" (contextmenu)="$event.stopPropagation()" (keydown)="menuKey($event)">
+        @if (loading() && !files().length) { <div class="empty"><mat-spinner diameter="22"/><p>Loading files...</p></div> }
+        @for (entry of entries(); track entry.path) {
+          <div class="file-row" tabindex="-1" [attr.data-path]="entry.path" [matContextMenuTriggerFor]="entryMenu" [matContextMenuTriggerData]="{ entry }" (contextmenu)="$event.stopPropagation()" (keydown)="menuKey($event)"><button class="file-name" (click)="open(entry)" [disabled]="!!busy()" [attr.aria-label]="(entry.directory ? 'Open folder ' : entry.file?.text ? 'Edit ' : 'Download ') + entry.path"><app-icon [name]="entry.directory ? 'folder' : entry.file?.text ? 'terminal' : 'cube'"/><span>{{ entry.name }}</span></button><span class="file-size">{{ entry.directory ? 'Folder' : fileSize(entry.file!.size) }}</span><button mat-icon-button [matMenuTriggerFor]="entryMenu" [matMenuTriggerData]="{ entry }" [attr.aria-label]="'Options for ' + entry.path"><span class="ellipsis" aria-hidden="true">⋯</span></button></div>
+        } @empty { @if (!loading()) { <div class="empty"><app-icon name="folder"/><div><p>{{ search.value ? 'No matching files or folders.' : 'This folder is empty.' }}</p>@if (!search.value && writable()) { <span>Drop files here or right-click to create one.</span> }</div></div> } }
+      </div>
+      @if (truncated()) { <p class="list-note">Some files could not be listed because this workspace is very large.</p> }
+      <div class="upload-panel" [matContextMenuTriggerFor]="entryMenu" [matContextMenuTriggerData]="{ entry: null }" (contextmenu)="$event.stopPropagation()"><div><strong>{{ dragging() ? 'Drop files into ' + directory() : 'Add files to ' + directory() }}</strong><p>Drag files here or choose them below.</p></div><input #fileUpload type="file" multiple hidden (change)="chooseFiles($event)"/><button mat-stroked-button (click)="fileUpload.click()" [disabled]="!writable() || !!busy()"><app-icon matButtonIcon name="plus"/>Choose files</button>@if (busy() === 'upload') { <div class="upload-progress" role="status"><span>{{ uploadLabel() }}</span><strong>{{ uploadProgress() }}%</strong><mat-progress-bar mode="determinate" [value]="uploadProgress()"/></div> }</div>
+    </div>
+  </div>
+  <p class="browser-hint">Right-click a file or folder for options. The ⋯ buttons work too.</p>
+</section>
+<mat-menu #entryMenu="matMenu">
+  <ng-template matMenuContent let-entry="entry">
+    @if (entry) {
+      @if (entry.directory) { <button mat-menu-item (click)="navigate(entry.path)">Open folder</button> }
+      @else { <button mat-menu-item (click)="openText(entry.path)" [disabled]="!entry.file?.text || !!busy()">Edit</button><button mat-menu-item (click)="download(entry.file)" [disabled]="!!busy()">Download</button> }
+      <button mat-menu-item (click)="changeEntry(entry, 'rename')" [disabled]="!writable() || !!busy() || fixed(entry)">Rename</button>
+      <button mat-menu-item (click)="changeEntry(entry, 'move')" [disabled]="!writable() || !!busy() || fixed(entry)">Move</button>
+      <button mat-menu-item (click)="changeEntry(entry, 'delete')" [disabled]="!writable() || !!busy() || fixed(entry)">Delete</button>
+    } @else { <button mat-menu-item (click)="create('folder')" [disabled]="!writable() || !!busy()">Create folder</button><button mat-menu-item (click)="create('file')" [disabled]="!writable() || !!busy()">Create file</button> }
+  </ng-template>
+</mat-menu>

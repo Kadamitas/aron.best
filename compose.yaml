@@ -1,0 +1,188 @@
+name: ${COMPOSE_PROJECT_NAME:-aron-best}
+
+x-runtime: &runtime
+  restart: unless-stopped
+  init: true
+  user: "10001:10001"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+x-build-args: &build-args
+  NODE_IMAGE: ${NODE_IMAGE:-node:26.9.0-bookworm-slim@sha256:582460f614631b59b824ac6020533b9bf339c7fdf3a6d7db31abb6b4065f0212}
+  JAVA_IMAGE: ${JAVA_IMAGE:-eclipse-temurin:25.0.4_7-jre-jammy@sha256:abed22bb0186ab4554c339fa41e0a361daed337b938929c95a1f2e4a228c1935}
+  JAVA8_IMAGE: ${JAVA8_IMAGE:-eclipse-temurin:8-jre-jammy@sha256:06641b36281c1ac815c33f3f3528cfea1c6fc41ddc60d261746e4343d19cbe65}
+  JAVA17_IMAGE: ${JAVA17_IMAGE:-eclipse-temurin:17-jre-jammy@sha256:e85989f3e4d136b3d7dde921e157fddb9c7016805a225c1ec483326b825b3ca5}
+  JAVA21_IMAGE: ${JAVA21_IMAGE:-eclipse-temurin:21-jre-jammy@sha256:61d6c7b34d36aee3f45d043101259f97f3c6d428dc2a6f75513789983c5e254f}
+  CADDY_IMAGE: ${CADDY_IMAGE:-caddy:2.11.4-alpine@sha256:de23def33b17fb5d1290b0f6c2add1d70780e52341896c00a4c8a2a2fe9d355e}
+
+services:
+  app:
+    <<: *runtime
+    build:
+      context: .
+      target: app
+      args: *build-args
+    image: ${APP_IMAGE:-aron-best-app:local}
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "3000"
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://127.0.0.1:3300}
+      PORTFOLIO_HOSTS: ${PORTFOLIO_HOST:-aron.best},${PORTFOLIO_ALIAS:-www.aron.best}
+      RUNTIME_DIRECTORY: /data
+      FRIEND_ACCESS_TOKEN_FILE: /run/secrets/friend_access_token
+      CONTROLLER_URL: http://minecraft:3001
+      CONTROLLER_TOKEN_FILE: /run/secrets/controller_token
+      TRUST_PROXY: ${CADDY_ADDRESS:-172.30.1.2}
+      IP_GRANTS: ${IP_GRANTS:-false}
+      MINECRAFT_VERSION: ${MINECRAFT_VERSION:-26.3}
+      FABRIC_LOADER_VERSION: ${FABRIC_LOADER_VERSION:-0.19.5}
+      MINECRAFT_ADDRESS: ${MINECRAFT_ADDRESS:-mc.aron.best}
+      WORKSHOP_NAME: ${WORKSHOP_NAME:-Dictionary Minecraft Server}
+      CURSEFORGE_API_KEY_FILE: /run/secrets/curseforge_api_key
+      CURSEFORGE_UPLOAD_TOKEN_FILE: /run/secrets/curseforge_upload_token
+      CURSEFORGE_PROJECT_ID: ${CURSEFORGE_PROJECT_ID:-}
+    ports:
+      - target: 3000
+        published: "${APP_PUBLISHED_PORT:-3300}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - app-state:/data
+    secrets: [friend_access_token, controller_token, curseforge_api_key, curseforge_upload_token]
+    networks: [web, control, app-egress]
+    depends_on:
+      minecraft:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=1770
+    pids_limit: 128
+    mem_limit: ${APP_MEMORY_LIMIT:-512m}
+    cpus: ${APP_CPUS:-1}
+    stop_grace_period: 20s
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/api/health',{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  minecraft:
+    <<: *runtime
+    build:
+      context: .
+      target: minecraft
+      args: *build-args
+    image: ${MINECRAFT_IMAGE:-aron-best-minecraft:local}
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      CONTROLLER_PORT: "3001"
+      CONTROLLER_TOKEN_FILE: /run/secrets/controller_token
+      CONTAINER_SANDBOX: "true"
+      RUNTIME_DIRECTORY: /data
+      JAVA_PATH: /opt/java/openjdk/bin/java
+      MINECRAFT_VERSION: ${MINECRAFT_VERSION:-26.3}
+      FABRIC_LOADER_VERSION: ${FABRIC_LOADER_VERSION:-0.19.5}
+      MINECRAFT_ADDRESS: ${MINECRAFT_ADDRESS:-mc.aron.best}
+      MINECRAFT_MEMORY_MB: ${MINECRAFT_MEMORY_MB:-4096}
+      MINECRAFT_GATEWAY: "true"
+      MINECRAFT_AUTOSTART: ${MINECRAFT_AUTOSTART:-false}
+      BOOTSTRAP_MINECRAFT: ${BOOTSTRAP_MINECRAFT:-true}
+      EULA_ACCEPTED: ${EULA_ACCEPTED:-true}
+    ports:
+      - target: 25565
+        published: "${MINECRAFT_PUBLISHED_PORT:-25575}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - minecraft-data:/data
+    secrets: [controller_token]
+    networks: [control, game]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=1770
+    pids_limit: 512
+    mem_limit: ${MINECRAFT_MEMORY_LIMIT:-6g}
+    cpus: ${MINECRAFT_CPUS:-4}
+    stop_grace_period: 90s
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/health',{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+
+  caddy:
+    <<: *runtime
+    profiles: [tls]
+    build:
+      context: .
+      target: caddy
+      args: *build-args
+    image: ${EDGE_IMAGE:-aron-best-caddy:local}
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:-agmlodkowski@gmail.com}
+      PORTFOLIO_HOST: ${PORTFOLIO_HOST:-aron.best}
+      PORTFOLIO_ALIAS: ${PORTFOLIO_ALIAS:-www.aron.best}
+      WORKSHOP_HOST: ${WORKSHOP_HOST:-mc.modpack.aron.best}
+      XDG_DATA_HOME: /data
+      XDG_CONFIG_HOME: /config
+    ports:
+      - target: 8080
+        published: "${HTTP_PUBLISHED_PORT:-80}"
+        host_ip: ${HTTP_BIND_ADDRESS:-0.0.0.0}
+        protocol: tcp
+      - target: 8443
+        published: "${HTTPS_PUBLISHED_PORT:-443}"
+        host_ip: ${HTTP_BIND_ADDRESS:-0.0.0.0}
+        protocol: tcp
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      web:
+        ipv4_address: ${CADDY_ADDRESS:-172.30.1.2}
+      edge: {}
+    depends_on:
+      app:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=10001,gid=10001,mode=1770
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 1
+    stop_grace_period: 20s
+
+secrets:
+  friend_access_token:
+    file: ${DOCKER_SECRETS_DIRECTORY:-./.runtime/docker/secrets}/friend_access_token
+  controller_token:
+    file: ${DOCKER_SECRETS_DIRECTORY:-./.runtime/docker/secrets}/controller_token
+  curseforge_api_key:
+    file: ${DOCKER_SECRETS_DIRECTORY:-./.runtime/docker/secrets}/curseforge_api_key
+  curseforge_upload_token:
+    file: ${DOCKER_SECRETS_DIRECTORY:-./.runtime/docker/secrets}/curseforge_upload_token
+
+volumes:
+  app-state: {}
+  minecraft-data: {}
+  caddy-data: {}
+  caddy-config: {}
+
+networks:
+  web:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${WEB_SUBNET:-172.30.1.0/24}
+  control:
+    internal: true
+  game: {}
+  edge: {}
+  app-egress: {}

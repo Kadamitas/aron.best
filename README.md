@@ -34,6 +34,8 @@ Minecraft mods execute Java code. Only give maintenance invitations to people yo
 
 ## Host on macOS
 
+The isolated deployment is documented in [Docker deployment](docs/docker.md). [Workshop controls](docs/workshop.md) covers the Basic and Advanced tabs, file limits, and repeatable browser checks.
+
 See [hosting and recovery](docs/hosting.md) for validated Caddy/nginx configuration, launchd services, DNS, GFiber port mappings, service logs, and rollback. GitHub Actions builds and tests on GitHub-hosted machines. The laptop is not a public CI runner.
 
 Local controls include request and connection limits, bounded request bodies and timeouts, bounded logs and status history, a global API budget, restart cooldowns, serialized maintenance, checksummed downloads, safe archive inspection, origin checks, and an explicit host allowlist. These reduce application abuse. They cannot absorb a volumetric DDoS attack that fills a residential internet link.
