@@ -90,11 +90,23 @@ export class RuntimeSandbox {
       await directory(cache);
       writable.push(cache);
     }
+    // Class data sharing: the JVM writes an archive of loaded classes on the first
+    // start and maps it on later starts, which removes most of the class-loading
+    // time before mods initialize. The archive is validated by the JVM against the
+    // classpath and silently ignored when it no longer matches.
+    const jvmCache = path.join(root, '.jvm-cache');
+    await directory(jvmCache);
+    writable.push(jvmCache);
     assertSandboxServerProperties(await readServerProperties(path.join(root, 'server.properties')));
     return {
       command: launcher,
       prefix: ['--read', root, ...writable.flatMap(value => ['--write', value]), '--connect', '3129', '--connect', '443', '--bind', '25566', '--', java],
-      javaArguments: [...javaProxyArguments(this.options.proxyAddress, 3129), `-Djava.io.tmpdir=${temporary}`, '-XX:-UsePerfData'],
+      javaArguments: [...javaProxyArguments(this.options.proxyAddress, 3129), `-Djava.io.tmpdir=${temporary}`, '-XX:-UsePerfData',
+        '-XX:+AutoCreateSharedArchive', `-XX:SharedArchiveFile=${path.join(jvmCache, 'server.jsa')}`,
+        // Aikar's G1 settings: shorter pauses and steadier tick times on a large heap.
+        '-XX:+UseG1GC', '-XX:+ParallelRefProcEnabled', '-XX:MaxGCPauseMillis=200', '-XX:+UnlockExperimentalVMOptions', '-XX:+DisableExplicitGC',
+        '-XX:G1NewSizePercent=30', '-XX:G1MaxNewSizePercent=40', '-XX:G1HeapRegionSize=8M', '-XX:G1ReservePercent=20', '-XX:InitiatingHeapOccupancyPercent=15',
+        '-XX:G1MixedGCLiveThresholdPercent=90', '-XX:G1RSetUpdatingPauseTimePercent=5', '-XX:SurvivorRatio=32', '-XX:+PerfDisableSharedMem', '-XX:MaxTenuringThreshold=1'],
     };
   }
 
