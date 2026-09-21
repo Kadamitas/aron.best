@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { access, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import Fastify, { LogController, type FastifyRequest } from 'fastify';
@@ -35,6 +35,23 @@ const environmentSchema = z.object({
 });
 export type Configuration = z.infer<typeof environmentSchema>;
 export function readConfiguration(environment: NodeJS.ProcessEnv = process.env): Configuration { return environmentSchema.parse(environment); }
+
+/**
+ * The page strangers see on the workshop host. It never includes the
+ * application bundle. If the visitor arrived through an invitation link, the
+ * fragment token is redeemed for this network and the page reloads into the app.
+ */
+function gatePage(nonce: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><title>The Workshop</title>
+<style nonce="${nonce}">html{background:#15191a;color:#eef0ea;font:15px/1.7 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
+main{max-width:520px;margin:18vh auto 0;padding:0 24px}.eyebrow{font:10px/1.5 "SFMono-Regular",Consolas,monospace;letter-spacing:.12em;color:#869282}
+h1{font-size:40px;line-height:1.05;letter-spacing:-.04em;font-weight:500;margin:14px 0 18px}p{color:#a1ac9c;margin:0 0 14px}code{color:#d3e3c5}
+#message{color:#c8f87a;min-height:1.5em}</style></head><body><main><p class="eyebrow">THE WORKSHOP</p><h1>Friends only.</h1>
+<p id="message"></p><p>This page belongs to a private Minecraft server. Join <code>mc.aron.best</code> in Minecraft from this network, or open the invite link you were given, and it unlocks for you.</p></main>
+<script nonce="${nonce}">(function(){var f=new URLSearchParams(location.hash.slice(1)),t=f.get('invite'),m=document.getElementById('message');if(!t)return;m.textContent='Checking your invitation...';
+fetch('/api/access/redeem',{method:'POST',headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json'},body:'{}'}).then(function(r){if(r.ok){history.replaceState(null,'',location.pathname);location.reload();}else{m.textContent='That invitation is not valid anymore. Ask for a new link.';}}).catch(function(){m.textContent='Could not reach the workshop. Try again in a moment.';});})();</script></body></html>`;
+}
 
 function authorized(request: FastifyRequest, secret: string) {
   if (secret.length < 32) return false;
@@ -97,12 +114,22 @@ export async function createApp(configuration = readConfiguration(), dependencie
     const allowed = ['aron.best', 'www.aron.best', publicHostname].includes(hostname) || isLocal;
     if (!allowed) return reply.code(421).send({ error: 'Unknown host.' });
     const route = request.routeOptions.url ?? '';
-    if (!route.startsWith('/api/')) return;
+    if (!route.startsWith('/api/')) {
+      // The workshop host is friends-only from the first byte: no bundle, no status, only the gate.
+      if (hostname === publicHostname && !hasAccess(request)) {
+        const nonce = randomBytes(16).toString('base64');
+        return reply.code(200)
+          .header('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`)
+          .header('Cache-Control', 'no-store').header('X-Robots-Tag', 'noindex, nofollow')
+          .type('text/html; charset=utf-8').send(gatePage(nonce));
+      }
+      return;
+    }
     if (Date.now() - globalWindow > 60_000) { globalWindow = Date.now(); globalRequests = 0; }
     if (++globalRequests > 1200) return reply.code(503).send({ error: 'The server is busy. Try again shortly.' });
     if (hostname !== publicHostname && !isLocal) return reply.code(404).send({ error: 'Not found.' });
     reply.header('Cache-Control', 'no-store');
-    if (route === '/api/status' || route === '/api/health') return;
+    if (route === '/api/health') return;
     if (!hasAccess(request)) return reply.code(401).send({ error: 'Redeem an invitation or join the Minecraft server from this network to unlock controls.' });
     if (!['GET', 'HEAD'].includes(request.method)) {
       const origin = request.headers.origin;

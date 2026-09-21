@@ -13,9 +13,20 @@ test('host separation, invitation, origin and command allowlist hold at the API 
   try {
     assert.equal((await app.inject({ url: '/api/status', headers: { host: 'aron.best' } })).statusCode, 404);
     assert.equal((await app.inject({ url: '/api/status', headers: { host: 'attacker.test' } })).statusCode, 421);
-    const status = await app.inject({ url: '/api/status', headers: { host: 'mc.modpack.aron.best' } });
+    assert.equal((await app.inject({ url: '/api/status', headers: { host: 'mc.modpack.aron.best' } })).statusCode, 401);
+    const gate = await app.inject({ url: '/', headers: { host: 'mc.modpack.aron.best' } });
+    assert.equal(gate.statusCode, 200);
+    assert.match(gate.body, /Friends only/);
+    assert.doesNotMatch(gate.body, /<app-root>/);
+    assert.match(gate.headers['content-security-policy'] as string, /script-src 'nonce-/);
+    assert.equal(gate.headers['x-robots-tag'], 'noindex, nofollow');
+    const opened = await app.inject({ url: '/', headers: { host: 'mc.modpack.aron.best', authorization: `Bearer ${secret}` } });
+    assert.doesNotMatch(opened.body, /Friends only/);
+    const portfolio = await app.inject({ url: '/', headers: { host: 'aron.best' } });
+    assert.doesNotMatch(portfolio.body, /Friends only/);
+    const status = await app.inject({ url: '/api/status', headers: { host: 'mc.modpack.aron.best', authorization: `Bearer ${secret}` } });
     assert.equal(status.statusCode, 200);
-    assert.equal(status.json().capabilities.authorized, false);
+    assert.equal(status.json().capabilities.authorized, true);
     const action = { method: 'POST' as const, url: '/api/server/action', payload: { action: 'restart' } };
     assert.equal((await app.inject(action)).statusCode, 401);
     assert.equal((await app.inject({ ...action, headers: { authorization: `Bearer ${secret}`, origin: 'https://evil.test' } })).statusCode, 403);

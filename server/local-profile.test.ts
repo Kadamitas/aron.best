@@ -181,7 +181,7 @@ async function workshop(root: string, metadataPath: string, launches: string[]) 
     minecraft: { launch: (_command, _arguments, options) => spawn(process.execPath, ['-e', launches[Math.min(count++, launches.length - 1)]!], { ...options, stdio: 'pipe' }), availableBytes: async () => 8n * 1024n ** 3n },
   });
   const headers = { host: 'mc.modpack.aron.best', origin: 'https://mc.modpack.aron.best', authorization: `Bearer ${secret}` };
-  const status = async (authorized = true) => (await app.inject({ url: '/api/status', headers: authorized ? headers : { host: 'mc.modpack.aron.best' } })).json();
+  const status = async () => (await app.inject({ url: '/api/status', headers })).json();
   const settle = async () => { for (let i = 0; i < 300; i++) { if (!(await status()).jobRunning) return; await delay(100); } throw new Error('The server job did not finish.'); };
   return { app, headers, minecraft, runtime, status, settle };
 }
@@ -192,7 +192,8 @@ test('friends request links, the host imports the App profile, and sync only com
   const { metadataPath } = await writeProfile(root, [mod]);
   const site = await workshop(root, metadataPath, [runningServer]);
   try {
-    const initial = await site.status(false);
+    assert.equal((await site.app.inject({ url: '/api/status', headers: { host: 'mc.modpack.aron.best' } })).statusCode, 401);
+    const initial = await site.status();
     assert.equal(initial.capabilities.localProfile, true);
     assert.deepEqual(initial.history, []);
     const request = await site.app.inject({ method: 'POST', url: '/api/pack/requests', headers: site.headers, payload: { url: 'https://www.curseforge.com/minecraft/mc-mods/mod-0' } });
@@ -245,8 +246,6 @@ test('a sync that crashes the server rolls back the mods, keeps the draft, and s
     assert.ok(Number.isFinite(Date.parse(after.server.failure.recoveredAt)), 'the rollback restart is marked as recovery');
     assert.ok(after.server.crashLog.some((line: string) => line.includes('Broken mod')));
     assert.match(after.server.crashLog[0], /crash-2026-09-21_01\.02\.03-server\.txt/);
-    const anonymous = await site.status(false);
-    assert.ok(anonymous.server.failure);
-    assert.equal(anonymous.server.crashLog, undefined);
+    assert.equal((await site.app.inject({ url: '/api/status', headers: { host: 'mc.modpack.aron.best' } })).statusCode, 401);
   } finally { await site.app.close(); }
 });
