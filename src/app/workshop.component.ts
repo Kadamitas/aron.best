@@ -179,7 +179,10 @@ export class WorkshopComponent {
       const interval = this.operationStatus() || this.serverTransitioning() ? 3_000 : 15_000;
       if (document.visibilityState === 'visible' && !this.busy() && !this.statusInFlight && this.profileOperation()?.accepted !== false && Date.now() - this.lastStatusRefresh >= interval) void this.refresh(false);
     }, 3_000);
-    this.destroyRef.onDestroy(() => clearInterval(timer));
+    // Polling pauses while the tab is hidden; catch up the moment it is visible again.
+    const onVisible = () => { if (document.visibilityState === 'visible' && !this.busy() && !this.statusInFlight) void this.refresh(false); };
+    document.addEventListener('visibilitychange', onVisible);
+    this.destroyRef.onDestroy(() => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); });
   }
 
   async refresh(showLoading = true): Promise<void> {
