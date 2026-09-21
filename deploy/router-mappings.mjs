@@ -14,8 +14,8 @@ export const routerNetwork = Object.freeze({
   descriptionUrl: 'http://192.168.1.1:5000/rootDesc.xml',
 });
 export const managedMappings = Object.freeze([
-  { externalPort: 80, internalPort: 8080, description: 'aron.best-http' },
-  { externalPort: 443, internalPort: 8443, description: 'aron.best-https' },
+  { externalPort: 80, internalPort: 80, description: 'aron.best-http' },
+  { externalPort: 443, internalPort: 443, description: 'aron.best-https' },
   { externalPort: 25565, internalPort: 25565, description: 'aron.best-minecraft' },
 ]);
 const leaseSeconds = 3600;
@@ -168,7 +168,7 @@ async function main(settingsPath) {
       // "606 Action not authorized" means UPnP mapping is disabled on the router: a settings
       // problem, not a network drop, so there is no point retrying every minute.
       wait = /606|not authorized/i.test(message) ? renewalMilliseconds : retryMilliseconds;
-      if (/606|not authorized/i.test(message)) console.error('The GFiber router refuses UPnP port mappings. Enable UPnP in the Google Fiber app, or add the three TCP rules there by hand (80 -> 8080, 443 -> 8443, 25565 -> 25565).');
+      if (/606|not authorized/i.test(message)) console.error('The GFiber router refuses UPnP port mappings. Enable UPnP in the Google Fiber app, or add the three TCP rules there by hand (80, 443, 25565 to this Mac).');
     }
     const temporary = `${settings.statusPath}.part`;
     await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });

@@ -18,10 +18,10 @@ test('only the three owned TCP mappings can be renewed', () => {
 test('same-port conflicts and permanent leases are preserved, never adopted', () => {
   for (const entry of [
     row(80, 8080, 'another-application'),
-    row(80, 8080, 'aron.best-http', '192.168.1.20'),
+    row(80, 80, 'aron.best-http', '192.168.1.20'),
     row(80, 9000, 'aron.best-http'),
-    row(80, 8080, 'aron.best-http', localAddress, 0),
-    row(80, 8080, 'aron.best-http', localAddress, 7200),
+    row(80, 80, 'aron.best-http', localAddress, 0),
+    row(80, 80, 'aron.best-http', localAddress, 7200),
   ]) assert.throws(() => assertOwnedMappings(parseMappingTable(table(entry), localAddress).mappings, localAddress));
 });
 
@@ -31,7 +31,7 @@ test('truncated or ambiguous table output cannot authorize mapping writes', () =
   assert.throws(() => parseMappingTable(table(' 0 TCP malformed'), localAddress));
   assert.throws(() => parseMappingTable(table(''), '192.168.1.105'));
   assert.throws(() => parseMappingTable(table('').replace(' i protocol exPort->inAddr:inPort description remoteHost leaseTime\n', ''), localAddress));
-  const duplicate = row(80, 8080, 'aron.best-http');
+  const duplicate = row(80, 80, 'aron.best-http');
   assert.throws(() => assertOwnedMappings(parseMappingTable(table(`${duplicate}\n${duplicate}`), localAddress).mappings, localAddress));
 });
 

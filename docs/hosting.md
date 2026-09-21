@@ -6,18 +6,18 @@ The deployment files prepare a local HTTPS gateway and background services. DNS 
 
 ```text
 Internet HTTPS :443
-  -> GFiber TCP forwarding to the Mac :8443
+  -> GFiber TCP forwarding to the Mac :443
   -> Caddy: TLS, hostname selection, forwarding-header replacement
   -> nginx 127.0.0.1:8081: request and connection limits
   -> Node 127.0.0.1:3000: Angular assets and application API
 
-Internet HTTP :80 -> GFiber -> Caddy :8080: HTTPS redirect and ACME
+Internet HTTP :80 -> GFiber -> Caddy :80: HTTPS redirect and ACME
 Minecraft Java TCP :25565 -> GFiber -> nginx :25565 -> Minecraft 127.0.0.1:25566
 ```
 
 `aron.best` and `www.aron.best` serve the professional site. Both proxies reject `/api` and `/api/*` on these hosts. `mc.modpack.aron.best` serves the workshop and API, with search indexing disabled. The application must also validate the host and the authority required for each operation. The workshop hostname is discoverable and is not an access credential.
 
-All services run without root privileges. Node and nginx's HTTP listener use IPv4 loopback. nginx also exposes the Minecraft TCP gateway on port 25565, while Java binds to `127.0.0.1:25566`. Caddy listens on unprivileged ports, so the router maps public ports to different internal ports. The Caddy administration API stays at `127.0.0.1:2019`. Do not forward port 2019, 3000, 8081, 25566, development servers, SSH, or Minecraft RCON.
+All services run without root privileges. Node and nginx's HTTP listener use IPv4 loopback. nginx also exposes the Minecraft TCP gateway on port 25565, while Java binds to `127.0.0.1:25566`. Caddy listens directly on 80 and 443, which macOS allows without root, because the GFiber port rules cannot translate port numbers. The Caddy administration API stays at `127.0.0.1:2019`. Do not forward port 2019, 3000, 8081, 25566, development servers, SSH, or Minecraft RCON.
 
 ## Prepare the Mac
 
@@ -65,8 +65,8 @@ Confirm the actual router model and reserve the Mac's current LAN IPv4 address. 
 
 | Protocol | Public port | Mac LAN port | Purpose |
 | --- | --- | --- | --- |
-| TCP | 80 | 8080 | ACME certificate validation and HTTPS redirect |
-| TCP | 443 | 8443 | HTTPS website and workshop |
+| TCP | 80 | 80 | ACME certificate validation and HTTPS redirect |
+| TCP | 443 | 443 | HTTPS website and workshop |
 | TCP | 25565 | 25565 | Minecraft Java server |
 
 HTTP/3 is intentionally disabled in this Caddy configuration, so UDP 443 is not required. Additional mod-specific UDP ports must be reviewed separately if a chosen mod needs them. Port forwarding rules should target this Mac only. A router DMZ is not required.
@@ -115,7 +115,7 @@ Inspect service status and listeners:
 launchctl print gui/$(id -u)/best.aron.api
 launchctl print gui/$(id -u)/best.aron.nginx
 launchctl print gui/$(id -u)/best.aron.caddy
-lsof -nP -iTCP:3000 -iTCP:8081 -iTCP:8080 -iTCP:8443 -iTCP:25565 -iTCP:25566 -sTCP:LISTEN
+lsof -nP -iTCP:3000 -iTCP:8081 -iTCP:80 -iTCP:443 -iTCP:25565 -iTCP:25566 -sTCP:LISTEN
 ```
 
 Ports 3000, 8081, and Java's 25566 must show `127.0.0.1`, not `*`. nginx owns public-facing port 25565. Validate the hostname boundary locally:

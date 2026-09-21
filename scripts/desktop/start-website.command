@@ -46,7 +46,7 @@ done
 printf '\n'
 if curl -fsS "$API/api/health" >/dev/null 2>&1; then ok "API is answering on 127.0.0.1:3000"; else fail "API did not answer. Check .runtime/logs/api.log"; finish 1; fi
 
-for entry in 8081:nginx 8443:Caddy-HTTPS 8080:Caddy-HTTP 25565:Minecraft-gateway; do
+for entry in 8081:nginx 443:Caddy-HTTPS 80:Caddy-HTTP 25565:Minecraft-gateway; do
   port="${entry%%:*}"; name="${entry##*:}"
   if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then ok "$name is listening on port $port"; else warn "$name is not listening on port $port yet"; fi
 done
