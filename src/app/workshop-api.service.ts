@@ -193,7 +193,7 @@ export class WorkshopApi {
       this.invitation = '';
       try { sessionStorage.removeItem(this.tokenKey); } catch {}
     }
-    const status = await firstValueFrom(this.http.get<WorkshopStatus>('/api/status', { headers: this.workspaceHeaders() }));
+    const status = await firstValueFrom(this.http.get<WorkshopStatus>('/api/status', { headers: this.workspaceHeaders() }).pipe(timeout(20_000)));
     if (request === this.statusRequest) {
       this.activeProfileId = status.profiles?.activeId;
       this.selectedWorkspaceId = status.workspace?.profileId ?? status.profiles?.activeId;
@@ -274,7 +274,7 @@ export class WorkshopApi {
   }
 
   logs(): Promise<{ lines: string[] }> {
-    return firstValueFrom(this.http.get<{ lines: string[] }>('/api/server/logs', { headers: this.headers }));
+    return firstValueFrom(this.http.get<{ lines: string[] }>('/api/server/logs', { headers: this.headers }).pipe(timeout(20_000)));
   }
 
   workspaceFiles(profileId = this.selectedWorkspaceId): Promise<{ files: WorkspaceFile[]; directories: WorkspaceDirectory[]; truncated: boolean }> {
@@ -294,7 +294,7 @@ export class WorkshopApi {
   }
 
   workspaceMods(profileId = this.selectedWorkspaceId): Promise<{ mods: WorkspaceMod[] }> {
-    return firstValueFrom(this.http.get<{ mods: WorkspaceMod[] }>('/api/workspace/mods', { headers: this.workspaceHeaders(profileId) }));
+    return firstValueFrom(this.http.get<{ mods: WorkspaceMod[] }>('/api/workspace/mods', { headers: this.workspaceHeaders(profileId) }).pipe(timeout(20_000)));
   }
 
   modAction(path: string, action: ModAction, profileId = this.selectedWorkspaceId): Promise<unknown> {

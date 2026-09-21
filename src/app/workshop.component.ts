@@ -203,7 +203,9 @@ export class WorkshopComponent {
       this.updateProfileOperation(status);
       if (this.installationDraft() && this.sameInstallation(this.installationDraft()!, this.currentInstallation())) this.installationDraft.set(null);
       this.connectionError.set('');
-      if (status.capabilities.authorized) await Promise.all([this.loadLogs(true), this.loadServerMods()]);
+      // Logs and mod lists refresh alongside status, but they must never hold the
+      // status poll hostage: a slow log request during a restart froze the page.
+      if (status.capabilities.authorized) void Promise.all([this.loadLogs(true), this.loadServerMods()]);
     } catch (error) {
       if (request === this.statusRequest) {
         this.connectionError.set(errorMessage(error));
