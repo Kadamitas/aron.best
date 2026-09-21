@@ -44,8 +44,29 @@ export interface WorkspaceManifest {
   name: string;
   version: string;
   author?: string;
-  files: unknown[];
+  /** CurseForge-managed mods. Their JARs are left out of overrides so the CurseForge App installs and tracks them itself. */
+  files: ManagedFile[];
   overrides: 'overrides';
+}
+
+export interface ManagedFile {
+  projectID: number;
+  fileID: number;
+  required: boolean;
+  fileName: string;
+  name?: string;
+  websiteUrl?: string;
+}
+
+const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
+
+/** The mod list the CurseForge App writes next to its own manifests; harmless elsewhere. */
+function modList(managed: ManagedFile[], bundled: string[]): string {
+  const rows = [
+    ...managed.map((file) => `<li>${file.websiteUrl ? `<a href="${escapeHtml(file.websiteUrl)}">${escapeHtml(file.name ?? file.fileName)}</a>` : escapeHtml(file.name ?? file.fileName)}</li>`),
+    ...bundled.map((name) => `<li>${escapeHtml(name)} (bundled in overrides)</li>`),
+  ];
+  return `<ul>\n${rows.join('\n')}\n</ul>\n`;
 }
 
 interface Directory {
@@ -244,12 +265,20 @@ export class ModpackFiles {
 
   async exportArchive(manifest: WorkspaceManifest): Promise<Buffer> {
     return this.exclusive(async () => {
-      const metadata = Buffer.from(`${JSON.stringify({ minecraft: manifest.minecraft, manifestType: 'minecraftModpack', manifestVersion: 1, name: manifest.name, version: manifest.version, ...(manifest.author ? { author: manifest.author } : {}), files: [], overrides: 'overrides' }, null, 2)}\n`);
-      if (metadata.length > 64 * 1024) throw new ModpackFilesError('The modpack archive metadata is too large.', 413);
-      const inventory = await this.archiveInventory();
-      const entries: Array<readonly [string, Buffer]> = [['manifest.json', metadata]];
+      const everything = await this.archiveInventory();
+      // Only mods whose JAR is actually installed and enabled are handed to CurseForge; the rest of the list is stale pack state.
+      const installed = new Map(everything.filter((item) => /^mods\/[^/]+\.jar$/i.test(item.path)).map((item) => [item.path.slice('mods/'.length).toLowerCase(), item.path]));
+      const managed = manifest.files.filter((file, index, all) => installed.has(file.fileName.toLowerCase()) && all.findIndex((other) => other.projectID === file.projectID) === index);
+      const managedPaths = new Set(managed.map((file) => installed.get(file.fileName.toLowerCase())!));
+      const inventory = everything.filter((item) => !managedPaths.has(item.path));
+      const bundled = inventory.filter((item) => /^mods\/[^/]+\.jar$/i.test(item.path)).map((item) => item.path.slice('mods/'.length));
+      const metadata = Buffer.from(`${JSON.stringify({ minecraft: manifest.minecraft, manifestType: 'minecraftModpack', manifestVersion: 1, name: manifest.name, version: manifest.version, ...(manifest.author ? { author: manifest.author } : {}),
+        files: managed.map((file) => ({ projectID: file.projectID, fileID: file.fileID, required: file.required })), overrides: 'overrides' }, null, 2)}\n`);
+      const list = Buffer.from(modList(managed, bundled));
+      if (metadata.length + list.length > 256 * 1024) throw new ModpackFilesError('The modpack archive metadata is too large.', 413);
+      const entries: Array<readonly [string, Buffer]> = [['manifest.json', metadata], ['modlist.html', list]];
       const versions = new Map<string, string>();
-      let total = 22 + 76 + Buffer.byteLength('manifest.json') * 2 + metadata.length;
+      let total = 22 + 76 + Buffer.byteLength('manifest.json') * 2 + metadata.length + 76 + Buffer.byteLength('modlist.html') * 2 + list.length;
       for (const item of inventory) {
         const name = `overrides/${item.path}`;
         total += 76 + Buffer.byteLength(name) * 2 + item.size;
@@ -263,7 +292,7 @@ export class ModpackFiles {
           entries.push([name, snapshot.bytes]);
         } finally { await directory.handle.close(); }
       }
-      if (JSON.stringify(await this.archiveInventory()) !== JSON.stringify(inventory)) throw new ModpackFilesError('The modpack changed while the archive was being built. Try again.', 409);
+      if (JSON.stringify(await this.archiveInventory()) !== JSON.stringify(everything)) throw new ModpackFilesError('The modpack changed while the archive was being built. Try again.', 409);
       for (const item of inventory) {
         const parts = pathParts(item.path);
         const directory = await this.directory(parts.slice(0, -1), false);

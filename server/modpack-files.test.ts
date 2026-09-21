@@ -33,7 +33,7 @@ async function upload(files: ModpackFiles, destination: string, contents: string
 const manifest: WorkspaceManifest = {
   minecraft: { version: '26.3', modLoaders: [{ id: 'fabric-0.19.5', primary: true }] },
   manifestType: 'minecraftModpack', manifestVersion: 1, name: 'After Hours', version: 'local-snapshot',
-  files: [{ projectID: 999, fileID: 123, required: true }], overrides: 'overrides',
+  files: [{ projectID: 999, fileID: 123, required: true, fileName: 'managed.jar', name: 'Managed Mod', websiteUrl: 'https://www.curseforge.com/minecraft/mc-mods/managed' }], overrides: 'overrides',
 };
 
 async function unzip(bytes: Buffer): Promise<Map<string, Buffer>> {
@@ -319,9 +319,11 @@ test('workspace archives include actual active mod bytes and configuration witho
   await put('fabric-server-launch.jar', 'runtime');
   const before = await files.list();
   const archive = await unzip(await files.exportArchive(manifest));
-  assert.deepEqual([...archive.keys()], ['manifest.json', 'overrides/config/éxample.json', 'overrides/mods/active.jar', 'overrides/resourcepacks/assets.zip', 'overrides/scripts/server.js']);
+  assert.deepEqual([...archive.keys()], ['manifest.json', 'modlist.html', 'overrides/config/éxample.json', 'overrides/mods/active.jar', 'overrides/resourcepacks/assets.zip', 'overrides/scripts/server.js']);
   const metadata = JSON.parse(archive.get('manifest.json')!.toString());
+  // The managed JAR is not installed, so CurseForge is not told to fetch it.
   assert.deepEqual(metadata.files, []);
+  assert.equal(archive.get('modlist.html')!.toString(), '<ul>\n<li>active.jar (bundled in overrides)</li>\n</ul>\n');
   assert.deepEqual(metadata.minecraft, manifest.minecraft);
   assert.equal(metadata.overrides, 'overrides');
   assert.equal(metadata.name, 'After Hours');
@@ -576,4 +578,23 @@ test('unknown extensions still require bounded valid UTF-8 while known binary fo
     await assert.rejects(files.writeText(filePath, 'changed', 'new'), /Binary files/);
     assert.equal((await files.list()).files.find(file => file.path === filePath)?.text, false);
   }
+});
+
+test('workspace archives hand installed CurseForge mods to the app by id and only bundle the rest', async t => {
+  const { files, put } = await fixture(t);
+  await put('mods/Managed.JAR', 'from curseforge');
+  await put('mods/custom.jar', 'hand built');
+  await put('mods/stale.jar.disabled', 'disabled');
+  const archive = await unzip(await files.exportArchive({ ...manifest, files: [
+    ...manifest.files,
+    { projectID: 999, fileID: 124, required: true, fileName: 'managed.jar' },
+    { projectID: 42, fileID: 7, required: true, fileName: 'missing.jar', name: 'Not installed' },
+    { projectID: 43, fileID: 8, required: true, fileName: 'stale.jar', name: 'Disabled' },
+  ] }));
+  assert.deepEqual([...archive.keys()], ['manifest.json', 'modlist.html', 'overrides/mods/custom.jar']);
+  const metadata = JSON.parse(archive.get('manifest.json')!.toString());
+  assert.deepEqual(metadata.files, [{ projectID: 999, fileID: 123, required: true }]);
+  assert.equal(metadata.version, 'local-snapshot');
+  assert.equal(archive.get('modlist.html')!.toString(),
+    '<ul>\n<li><a href="https://www.curseforge.com/minecraft/mc-mods/managed">Managed Mod</a></li>\n<li>custom.jar (bundled in overrides)</li>\n</ul>\n');
 });
