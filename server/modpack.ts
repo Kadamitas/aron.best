@@ -292,34 +292,6 @@ export class PackService {
     });
   }
 
-  /**
-   * Learn CurseForge project and file ids from a CurseForge App profile's minecraftinstance.json.
-   * Nothing is downloaded or removed: mods already in the draft are updated by project id and new
-   * ones are added, so the modpack download can hand them to the App by id instead of bundling JARs.
-   */
-  async learnInstanceMods(input: unknown): Promise<{ pack: Pack; learned: number }> {
-    const { pack: incoming } = parseInstalledProfile(input);
-    return this.serial(async () => {
-      const pack = await this.getPack();
-      if (incoming.minecraftVersion !== pack.minecraftVersion || incoming.loader !== pack.loader) {
-        throw new CurseForgeError('PROFILE_TARGET_MISMATCH', `That profile targets Minecraft ${incoming.minecraftVersion} with ${incoming.loader}. This pack uses Minecraft ${pack.minecraftVersion} with ${pack.loader}.`);
-      }
-      let learned = 0;
-      for (const mod of incoming.mods) {
-        const index = pack.mods.findIndex((existing) => existing.id === mod.id);
-        const existing = pack.mods[index];
-        if (existing && existing.fileId === mod.fileId && existing.version === mod.version && existing.author === mod.author) continue;
-        learned++;
-        if (existing) pack.mods[index] = { ...existing, fileId: mod.fileId, version: mod.version, name: mod.name, ...(mod.author ? { author: mod.author } : {}),
-          ...(mod.websiteUrl ? { websiteUrl: mod.websiteUrl } : {}), ...(mod.logoUrl ? { logoUrl: mod.logoUrl } : {}) };
-        else pack.mods.push({ ...mod, dependencies: [], conflicts: [], requiredBy: [] });
-      }
-      if (pack.mods.length > 150) throw new CurseForgeError('MOD_LIMIT', 'The pack is limited to 150 mods.', 409);
-      if (learned) { reconnectDependencies(pack.mods); await this.persist(pack); }
-      return { pack: structuredClone(pack), learned };
-    });
-  }
-
   async importLocalProfile(input: Pack): Promise<Pack> {
     const incoming = packSchema.parse(input);
     return this.serial(async () => {

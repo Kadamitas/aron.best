@@ -12,14 +12,7 @@
           @if (optionsLoading()) { <mat-spinner diameter="14" aria-label="Loading compatible versions"/> }
           @if (installationDirty()) { <button class="save-version" mat-flat-button (click)="saveInstallation()" [disabled]="!installationValid() || !writable() || !!busy() || optionsLoading() || !!connectionError()" [matTooltip]="writable() ? 'Back up and apply these versions' : 'Stop this server before changing versions'">{{ busy() === 'installation' || workspaceTransitioning() ? 'Saving...' : 'Save' }}</button><button class="cancel-version" mat-button (click)="resetInstallation()" [disabled]="!!busy() || workspaceTransitioning()">Cancel</button> }
         </div></div>
-        <div class="download">
-          <div class="download-buttons">
-            <button mat-stroked-button (click)="downloadPack()" [disabled]="!downloadReady() || !!busy() || !!connectionError()"><app-icon matButtonIcon name="download"/>Download pack ZIP</button>
-            <button mat-stroked-button (click)="instanceInput.click()" [disabled]="!downloadReady() || !!busy() || !!connectionError()" matTooltip="Pick minecraftinstance.json from Documents/curseforge/minecraft/Instances/(profile) so downloads list those mods by CurseForge id instead of bundling the JARs">Read CurseForge App profile</button>
-            <input #instanceInput type="file" accept=".json,application/json" hidden (change)="importInstance(instanceInput)">
-          </div>
-          <small>{{ downloadHint() }}</small>
-        </div>
+        <div class="download"><button mat-stroked-button (click)="downloadPack()" [disabled]="!downloadReady() || !!busy() || !!connectionError()"><app-icon matButtonIcon name="download"/>Download pack ZIP</button><small>{{ downloadHint() }}</small></div>
       </section>
       @if (current.profiles; as saved) {
         <section class="saved-servers" aria-label="Saved servers">

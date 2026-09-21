@@ -205,11 +205,6 @@ export class WorkshopApi {
     return firstValueFrom(this.http.post('/api/pack/requests', { url }, { headers: this.headers }));
   }
 
-  /** Upload a CurseForge App profile's minecraftinstance.json so the pack learns project and file ids. */
-  importInstance(metadata: unknown): Promise<{ learned: number }> {
-    return firstValueFrom(this.http.post<{ learned: number }>('/api/pack/import-instance', metadata, { headers: this.headers }));
-  }
-
   importLocalProfile(): Promise<unknown> {
     return firstValueFrom(this.http.post('/api/pack/import-local', {}, { headers: this.headers }));
   }

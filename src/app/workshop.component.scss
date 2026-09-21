@@ -20,7 +20,6 @@ h1 { font-size: clamp(26px, 3.4vw, 38px); line-height: 1.1; letter-spacing: -1.2
 .selected-version { color: #c8f87a; }
 .selected-version app-icon { width: 15px; height: 15px; vertical-align: middle; margin-left: 12px; }
 .download { display: grid; gap: 9px; justify-items: end; }
-.download-buttons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: end; }
 .download small { font-size: 10px; color: #919a95; }
 .saved-servers { display: flex; align-items: center; gap: 12px; margin: -7px 0 23px; flex-wrap: wrap; }
 .saved-label { color: #89968b; font-size: 11px; }
