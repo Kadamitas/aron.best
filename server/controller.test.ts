@@ -266,7 +266,9 @@ test('authenticated controller actions extend the socket timeout for long-runnin
     });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { completed: true });
-    assert(Date.now() - started >= 450);
+    // The fake server reports ready immediately; the controller polls readiness every 200 ms, so the
+    // request outlives the 20 ms socket timeout by at least one poll interval.
+    assert(Date.now() - started >= 150);
     assert.equal(setup.app.server.timeout, 20);
     assert.equal((await setup.app.inject({ url: '/status', headers: authorization })).json().server.state, 'running');
   } finally { await setup.dispose(); }

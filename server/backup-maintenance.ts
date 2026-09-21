@@ -27,10 +27,13 @@ async function assertDirectory(directory: Directory): Promise<void> {
   const current = await lstat(directory.absolute);
   if (!current.isDirectory() || !same(current, directory.identity)) throw failure('A storage folder changed.');
 }
-async function directory(absolute: string): Promise<Directory> {
-  if (!path.isAbsolute(absolute) || absolute !== path.normalize(absolute) || absolute === path.parse(absolute).root || await realpath(absolute) !== absolute) throw failure('Use a dedicated real runtime directory without symbolic links.');
-  const before = await lstat(absolute);
-  if (!before.isDirectory()) throw failure('A storage folder is linked or invalid.');
+async function directory(requested: string): Promise<Directory> {
+  if (!path.isAbsolute(requested) || requested !== path.normalize(requested) || requested === path.parse(requested).root) throw failure('Use a dedicated real runtime directory without symbolic links.');
+  const before = await lstat(requested);
+  // The storage folder itself must be a real directory. Its ancestors may be
+  // symbolic links (macOS keeps /var under /private), so work on the resolved path.
+  if (before.isSymbolicLink() || !before.isDirectory()) throw failure('A storage folder is linked or invalid.');
+  const absolute = await realpath(requested);
   const handle = await open(absolute, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try {
     const identity = await handle.stat();
