@@ -1,0 +1,48 @@
+{
+  "name": "aron-best",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aron Mlodkowski's Angular portfolio and private-link Minecraft workshop",
+  "type": "module",
+  "engines": {
+    "node": ">=26.0.0 <27"
+  },
+  "scripts": {
+    "dev": "ng serve --host 127.0.0.1 --port 4200 --proxy-config proxy.conf.json",
+    "dev:server": "node --env-file-if-exists=.env --import tsx --watch server/index.ts",
+    "build": "ng build && tsc -p server/tsconfig.json",
+    "start": "node --env-file-if-exists=.env dist/server/index.js",
+    "check": "tsc --noEmit -p server/tsconfig.json && ng build",
+    "test": "node --import tsx --test server/*.test.ts",
+    "bootstrap": "node --import tsx scripts/bootstrap.ts",
+    "invite": "node --import tsx scripts/invite.ts"
+  },
+  "dependencies": {
+    "@angular/cdk": "22.1.7",
+    "@angular/common": "22.1.7",
+    "@angular/compiler": "22.1.7",
+    "@angular/core": "22.1.7",
+    "@angular/forms": "22.1.7",
+    "@angular/material": "22.1.7",
+    "@angular/platform-browser": "22.1.7",
+    "@angular/router": "22.1.7",
+    "@fastify/helmet": "^13.0.2",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/static": "10.1.4",
+    "fastify": "^5.6.0",
+    "rxjs": "~7.8.2",
+    "tslib": "^2.8.1",
+    "yauzl": "^3.2.0",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@angular/build": "22.1.8",
+    "@angular/cli": "22.1.8",
+    "@angular/compiler-cli": "22.1.7",
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^26.0.0",
+    "@types/yauzl": "^2.10.3",
+    "tsx": "^4.20.5",
+    "typescript": "~6.0.2"
+  }
+}

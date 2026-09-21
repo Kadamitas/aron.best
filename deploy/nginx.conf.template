@@ -1,0 +1,107 @@
+worker_processes 1;
+daemon off;
+pid {{NGINX_PID}};
+error_log stderr error;
+
+events {
+    worker_connections 1024;
+}
+
+stream {
+    limit_conn_zone $binary_remote_addr zone=minecraft_clients:1m;
+    limit_conn_zone $server_port zone=minecraft_total:1m;
+    limit_conn_log_level warn;
+
+    server {
+        listen 0.0.0.0:25565;
+        limit_conn minecraft_clients 6;
+        limit_conn minecraft_total 64;
+        proxy_connect_timeout 3s;
+        proxy_timeout 120s;
+        proxy_pass 127.0.0.1:25566;
+    }
+}
+
+http {
+    server_tokens off;
+    access_log off;
+    client_body_temp_path {{NGINX_TEMP}};
+    proxy_temp_path {{NGINX_PROXY_TEMP}};
+
+    # Only Caddy can be reached remotely. Its single-value header replaces the
+    # address used for all following rate and connection counters.
+    set_real_ip_from 127.0.0.1;
+    real_ip_header X-Real-IP;
+    real_ip_recursive off;
+
+    map $request_method $mutation_client {
+        default $binary_remote_addr;
+        GET "";
+        HEAD "";
+        OPTIONS "";
+    }
+
+    limit_req_zone $binary_remote_addr zone=page_requests:1m rate=20r/s;
+    limit_req_zone $binary_remote_addr zone=api_requests:1m rate=5r/s;
+    limit_req_zone $mutation_client zone=mutation_requests:1m rate=30r/m;
+    limit_conn_zone $binary_remote_addr zone=client_connections:1m;
+    limit_conn_zone $server_name zone=host_connections:1m;
+    limit_req_status 429;
+    limit_conn_status 429;
+    limit_req_log_level warn;
+    limit_conn_log_level warn;
+
+    client_max_body_size 1m;
+    client_body_timeout 10s;
+    client_header_timeout 5s;
+    keepalive_timeout 15s;
+    keepalive_requests 100;
+    send_timeout 15s;
+    reset_timedout_connection on;
+
+    upstream application {
+        server 127.0.0.1:3000;
+        keepalive 16;
+    }
+
+    server {
+        listen 127.0.0.1:8081 default_server;
+        server_name _;
+        return 444;
+    }
+
+    server {
+        listen 127.0.0.1:8081;
+        server_name aron.best www.aron.best;
+        limit_conn client_connections 20;
+        limit_conn host_connections 120;
+
+        location = /api { return 404; }
+        location ^~ /api/ { return 404; }
+
+        location / {
+            limit_req zone=page_requests burst=40 nodelay;
+            include {{PROXY_INCLUDE}};
+        }
+    }
+
+    server {
+        listen 127.0.0.1:8081;
+        server_name mc.modpack.aron.best;
+        limit_conn client_connections 20;
+        limit_conn host_connections 120;
+
+        location = /api { return 404; }
+
+        location ^~ /api/ {
+            limit_req zone=api_requests burst=15 nodelay;
+            limit_req zone=mutation_requests burst=8 nodelay;
+            include {{PROXY_INCLUDE}};
+        }
+
+        location / {
+            limit_req zone=page_requests burst=40 nodelay;
+            include {{PROXY_INCLUDE}};
+        }
+    }
+}

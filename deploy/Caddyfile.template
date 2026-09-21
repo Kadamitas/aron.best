@@ -1,0 +1,46 @@
+{
+	admin 127.0.0.1:2019
+	http_port 8080
+	https_port 8443
+	servers {
+		protocols h1 h2
+		timeouts {
+			read_header 5s
+			read_body 15s
+			idle 30s
+		}
+		max_header_size 16KB
+	}
+}
+
+(application) {
+	encode zstd gzip
+	request_body {
+		max_size 1MB
+	}
+	header -Server
+	reverse_proxy 127.0.0.1:8081 {
+		# The internet peer supplies no trusted forwarding headers.
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto https
+		header_up -Forwarded
+		transport http {
+			dial_timeout 3s
+			response_header_timeout 60s
+		}
+	}
+}
+
+aron.best, www.aron.best {
+	@management path /api /api/*
+	respond @management 404
+	import application
+}
+
+mc.modpack.aron.best {
+	header X-Robots-Tag "noindex, nofollow, noarchive"
+	import application
+}

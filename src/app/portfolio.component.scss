@@ -1,0 +1,171 @@
+:host {
+  display: block;
+  min-height: 100dvh;
+  color-scheme: dark;
+  background: #101212;
+  color: #e7e9e2;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mat-sys-primary: #c7d9c9;
+  --mat-sys-on-primary: #17271b;
+  --mat-sys-surface: #101212;
+  --mat-sys-on-surface: #e7e9e2;
+  --mat-sys-on-surface-variant: #a1aba1;
+  --mat-sys-outline: #526057;
+}
+
+::selection { background: #bbcebd; color: #17271b; }
+:focus-visible { outline: 2px solid #c7d9c9; outline-offset: 5px; }
+.skip-link { background: #c7d9c9; color: #17271b; }
+.page-width { width: min(calc(100% - 80px), 1040px); margin-inline: auto; }
+
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 100px;
+  gap: 32px;
+  width: min(calc(100% - 80px), 1120px);
+  position: relative;
+  z-index: 3;
+}
+
+.site-address { color: #e0e5db; font-size: 17px; font-weight: 500; letter-spacing: -.035em; }
+nav { display: flex; align-items: center; gap: 30px; color: #9da69c; font-size: 14px; }
+nav a { padding-block: 10px; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 6px; transition: color 160ms, text-decoration-color 160ms; }
+nav a:hover { color: #e1e8dc; text-decoration-color: #82967e; }
+
+.introduction {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  min-height: 730px;
+  min-height: min(800px, max(700px, calc(100svh - 100px)));
+  padding-top: 20px;
+  padding-bottom: 100px;
+  overflow: hidden;
+}
+
+.introduction::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(90deg, #101212b8 0%, #10121292 28%, #10121218 67%, transparent 100%);
+}
+
+app-terrain { z-index: -2; }
+.introduction-content { width: min(calc(100% - 80px), 1120px); }
+h1 { font-family: Georgia, 'Times New Roman', serif; font-weight: 400; font-size: clamp(70px, 7.5vw, 108px); letter-spacing: -.055em; line-height: .98; margin: 0 0 31px; }
+h1 > span { color: #a9bdac; }
+.role { font-size: 14px; color: #a6b2a6; margin-bottom: 23px; letter-spacing: .015em; }
+.biography { max-width: 530px; }
+.biography p { font-size: 16px; line-height: 1.75; letter-spacing: -.01em; color: #969f96; margin: 0 0 14px; }
+.biography p:first-child { color: #b6beb3; font-size: 17px; line-height: 1.8; }
+.profile-links { display: flex; align-items: center; flex-wrap: wrap; gap: 28px; margin-top: 26px; font-size: 14px; }
+.profile-links > a { display: inline-flex; align-items: center; gap: 4px; }
+.profile-links > a:not(.email-button) { min-height: 44px; color: #b2bcae; }
+.profile-links > a:not(.email-button):hover { color: #e2ebdd; }
+.profile-links app-icon { width: 15px; height: 15px; }
+.email-button { min-height: 42px; padding-inline: 18px; border-radius: 3px; font-size: 13px; font-weight: 500; }
+.email-button app-icon { margin-left: 7px; }
+
+.content-section {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  padding-top: 48px;
+  padding-bottom: 58px;
+  border-top: 1px solid #2a302c;
+  scroll-margin-top: 35px;
+}
+
+.section-label { font-size: 14px; line-height: 1.7; font-weight: 400; color: #94a08f; letter-spacing: -.01em; margin: 0; }
+.section-content { min-width: 0; max-width: 730px; }
+.section-content p { font-size: 16px; line-height: 1.85; color: #98a193; letter-spacing: -.012em; margin: 0 0 15px; }
+.job { padding-bottom: 31px; }
+.job + .job { padding-top: 31px; border-top: 1px solid #252b26; }
+.job-heading { margin-bottom: 17px; }
+.job h3 { font-size: 18px; line-height: 1.5; font-weight: 500; letter-spacing: -.025em; margin: 0 0 5px; color: #dfe5d9; }
+.job .job-role { color: #aab6a2; font-size: 15px; margin: 0; line-height: 1.7; }
+.job .job-period { font-size: 13px; color: #798571; margin: 10px 0 0; font-variant-numeric: tabular-nums; }
+.job > p:last-child { margin-bottom: 0; }
+.earlier-role { padding-bottom: 28px; }
+.education { padding-top: 23px; border-top: 1px solid #252b26; }
+.education h3 { margin: 0 0 13px; font-size: 13px; font-weight: 400; color: #7e8d75; }
+.education p { font-size: 14px; line-height: 1.75; margin: 0; }
+.education p:first-of-type { color: #bdc8b3; }
+.section-intro { margin-bottom: 20px !important; }
+.project { display: flex; justify-content: space-between; align-items: flex-start; gap: 26px; padding: 25px 0; border-top: 1px solid #252b26; }
+.project h3 { font-size: 19px; font-weight: 500; line-height: 1.5; letter-spacing: -.025em; color: #dfe5d9; margin: 0 0 8px; transition: color 160ms; }
+.project p { max-width: 610px; margin-bottom: 9px; }
+.project-language { display: block; font-size: 12px; line-height: 1.7; color: #7e8d75; }
+.project > app-icon { width: 18px; height: 18px; color: #829477; margin-top: 4px; transition: color 160ms, transform 160ms; }
+.project:hover h3 { color: #c7d9c9; }
+.project:hover > app-icon { color: #c7d9c9; transform: translate(2px, -2px); }
+.all-projects { display: inline-flex; align-items: center; gap: 6px; min-height: 42px; margin-top: 3px; color: #c7d9c9; font-size: 14px; }
+.all-projects app-icon { width: 15px; height: 15px; }
+.all-projects:hover { text-decoration: underline; text-underline-offset: 5px; }
+.contact-section { padding-top: 42px; padding-bottom: 49px; }
+.contact-section p { margin-bottom: 4px; }
+.inline-link { color: #c2d1b8; text-decoration: underline; text-decoration-color: #4c5c42; text-underline-offset: 4px; text-decoration-thickness: 1px; overflow-wrap: anywhere; transition: color 160ms, text-decoration-color 160ms; }
+.inline-link:hover { color: #e7edde; text-decoration-color: #c7d9c9; }
+.site-footer { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-block: 26px 35px; border-top: 1px solid #2a302c; color: #77826d; font-size: 12px; }
+.site-footer a { display: inline-flex; align-items: center; gap: 5px; color: #899b7b; min-height: 35px; }
+.site-footer a:hover { color: #c7d9c9; }
+.site-footer app-icon { width: 13px; height: 13px; }
+.page-arrive { animation: arrive 550ms ease-out both; }
+
+@keyframes arrive {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (min-width: 1100px) {
+  .job-heading { display: flex; align-items: start; justify-content: space-between; gap: 24px; }
+  .job-heading > div { max-width: 435px; }
+  .job .job-period { white-space: nowrap; font-size: 12px; margin-top: 5px; }
+}
+
+@media (max-width: 850px) {
+  .page-width, .site-header, .introduction-content { width: calc(100% - 64px); }
+  .content-section { grid-template-columns: 150px minmax(0, 1fr); }
+  .introduction { min-height: 760px; padding-top: 35px; padding-bottom: 125px; }
+  h1 { font-size: 86px; }
+  .biography { max-width: 500px; }
+  .introduction::after { background: linear-gradient(90deg, #101212bf 0%, #10121270 40%, #10121210 100%); }
+}
+
+@media (max-width: 600px) {
+  .page-width, .site-header, .introduction-content { width: calc(100% - 44px); }
+  .site-header { min-height: 83px; gap: 20px; }
+  .site-address { font-size: 16px; }
+  nav { gap: 20px; font-size: 13px; }
+  .introduction { min-height: 750px; align-items: start; padding-top: 56px; padding-bottom: 160px; }
+  .introduction::after { background: linear-gradient(180deg, #10121200 0%, #10121200 28%, #1012127d 46%, #10121238 68%, transparent 100%); }
+  h1 { font-size: clamp(58px, 13.5vw, 80px); letter-spacing: -.05em; margin-bottom: 29px; }
+  .role { font-size: 13px; margin-bottom: 22px; }
+  .biography { max-width: 380px; }
+  .biography p:first-child { font-size: 16px; line-height: 1.8; }
+  .biography p { font-size: 15px; line-height: 1.8; }
+  .profile-links { gap: 24px; margin-top: 25px; font-size: 13px; }
+  .email-button { padding-inline: 15px; }
+  .content-section { display: block; padding-top: 33px; padding-bottom: 39px; }
+  .section-label { font-size: 14px; margin-bottom: 29px; }
+  .section-content p { font-size: 16px; }
+  .job h3, .project h3 { font-size: 18px; }
+  .job-heading { margin-bottom: 16px; }
+  .job .job-role { font-size: 14px; }
+  .job .job-period { font-size: 12px; margin-top: 9px; }
+  .job { padding-bottom: 25px; }
+  .job + .job { padding-top: 26px; }
+  .education p { font-size: 14px; }
+  .project { padding-block: 23px; gap: 18px; }
+  .contact-section { padding-bottom: 35px; }
+  .contact-section .section-label { margin-bottom: 20px; }
+  .site-footer { padding-block: 22px 29px; font-size: 11px; gap: 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-arrive { animation: none; }
+}

@@ -1,0 +1,141 @@
+<a class="skip-link" href="#main">Skip to content</a>
+
+<div class="personal-site">
+  <header class="site-header page-width">
+    <a class="site-address" href="/" aria-label="Aron Mlodkowski home">aron.best</a>
+    <nav aria-label="On this page">
+      <a href="#work">Work</a>
+      <a href="#projects">Projects</a>
+      <a href="#contact">Contact</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="introduction" aria-labelledby="name">
+      <app-terrain/>
+      <div class="introduction-content page-width" animate.enter="page-arrive">
+        <p class="role">Software engineer</p>
+        <h1 id="name">Aron<br>Mlodkowski<span aria-hidden="true">.</span></h1>
+
+        <div class="biography">
+          <p>
+            I’m a software engineer working with Java, Spring Boot, and Angular.
+            At the National Center for Missing &amp; Exploited Children, I build
+            services and web applications.
+          </p>
+          <p>
+            Outside of work, I make Minecraft mods and tools that automate
+            everyday tasks.
+          </p>
+        </div>
+
+        <div class="profile-links" aria-label="Contact and profiles">
+          <a mat-flat-button class="email-button" href="mailto:agmlodkowski@gmail.com">
+            Email me <app-icon name="arrow-up-right"/>
+          </a>
+          <a href="https://github.com/Kadamitas" target="_blank" rel="noopener noreferrer">
+            GitHub <app-icon name="arrow-up-right"/>
+          </a>
+          <a href="https://www.linkedin.com/in/aron-mlodkowski-bb4b74215/" target="_blank" rel="noopener noreferrer">
+            LinkedIn <app-icon name="arrow-up-right"/>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <section id="work" class="content-section page-width" aria-labelledby="work-title">
+      <h2 id="work-title" class="section-label">Work</h2>
+
+      <div class="section-content">
+        <article class="job">
+          <div class="job-heading">
+            <div>
+              <h3>National Center for Missing &amp; Exploited Children</h3>
+              <p class="job-role">Software Engineer</p>
+            </div>
+            <p class="job-period">May 2023 to present</p>
+          </div>
+          <p>
+            I develop high-volume Spring Boot microservices and Angular applications,
+            with RabbitMQ for messaging and JUnit, AssertJ, and Mockito for testing.
+            I also work on delivery pipelines using Jenkins, Docker, and Terraform.
+          </p>
+          <p>
+            Alongside that work, I serve as a generative AI subject matter expert
+            and mentor other engineers.
+          </p>
+        </article>
+
+        <article class="job">
+          <div class="job-heading">
+            <div>
+              <h3>Fortitude Systems</h3>
+              <p class="job-role">Junior Software Engineer</p>
+            </div>
+            <p class="job-period">Sep 2022 to May 2023</p>
+          </div>
+          <p>
+            I built Angular clients for Spring Boot services, wrote behavior tests
+            with Cucumber, and worked with Jenkins and Docker to deliver updates.
+          </p>
+        </article>
+
+        <article class="job earlier-role">
+          <h3>Aisin</h3>
+          <p class="job-role">Automation Engineering Intern</p>
+        </article>
+
+        <div class="education">
+          <h3>Education</h3>
+          <p>B.Sc. in Computer Science</p>
+          <p>Southern Illinois University Carbondale</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="projects" class="content-section page-width" aria-labelledby="projects-title">
+      <h2 id="projects-title" class="section-label">Personal projects</h2>
+
+      <div class="section-content">
+        <p class="section-intro">A few things I’ve been working on outside my day job.</p>
+
+        <div class="project-list">
+          @for (project of projects; track project.url) {
+            <a class="project" [href]="project.url" target="_blank" rel="noopener noreferrer" [attr.aria-labelledby]="project.id">
+              <div>
+                <h3 [id]="project.id">{{ project.name }}</h3>
+                <p>{{ project.description }}</p>
+                <span class="project-language">{{ project.technology }}</span>
+              </div>
+              <app-icon name="arrow-up-right"/>
+            </a>
+          }
+        </div>
+
+        <a class="all-projects" href="https://github.com/Kadamitas?tab=repositories" target="_blank" rel="noopener noreferrer">
+          More on GitHub <app-icon name="arrow-up-right"/>
+        </a>
+      </div>
+    </section>
+
+    <section id="contact" class="content-section contact-section page-width" aria-labelledby="contact-title">
+      <h2 id="contact-title" class="section-label">Contact</h2>
+      <div class="section-content">
+        <p>
+          You can reach me at
+          <a class="inline-link" href="mailto:agmlodkowski@gmail.com">agmlodkowski&#64;gmail.com</a>.
+        </p>
+        <p>
+          I’m also on
+          <a class="inline-link" href="https://www.linkedin.com/in/aron-mlodkowski-bb4b74215/" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+          and <a class="inline-link" href="https://github.com/Kadamitas" target="_blank" rel="noopener noreferrer">GitHub</a>.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer page-width">
+    <span>© {{ year }} Aron Mlodkowski</span>
+    <a href="#main">Back to top <app-icon name="arrow-up-right"/></a>
+  </footer>
+</div>

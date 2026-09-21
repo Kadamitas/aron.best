@@ -1,0 +1,113 @@
+<a class="skip-link" href="#workshop-main">Skip to workshop</a>
+<div class="workshop">
+  <header class="workshop-header">
+    <a class="workshop-brand" href="/" aria-label="The Workshop home"><span class="workshop-symbol"><app-icon name="cube"/></span><span>the workshop<span class="brand-subtitle">A WORLD WE BUILD TOGETHER</span></span></a>
+    <div class="workshop-header-right"><span class="invite-status"><app-icon [name]="authorized() ? 'shield' : 'link'"/> {{ authorized() ? 'Friend access' : 'View only' }}</span><button mat-icon-button (click)="refresh()" [disabled]="loading()" aria-label="Refresh workshop status" matTooltip="Refresh status"><app-icon name="refresh"/></button></div>
+  </header>
+
+  <main id="workshop-main" class="workshop-main">
+    @if (connectionError()) {
+      <div class="notice error-notice" role="alert" animate.enter="enter-up"><app-icon name="server"/><div><strong>The workshop is out of reach.</strong><p>{{ connectionError() }}</p>@if (status()) { <small>Showing the last known state. Controls are paused until we reconnect.</small> }</div><button mat-button (click)="refresh()" [disabled]="loading()">Try again</button></div>
+    }
+
+    <section class="workshop-intro" aria-labelledby="workshop-title" animate.enter="enter-up">
+      <div><p class="eyebrow"><span class="status-dot"></span> GOOD FRIENDS. QUESTIONABLE MOD CHOICES.</p><h1 id="workshop-title">Our world.<br><span>Our kind of weird.</span></h1><p class="intro-copy">Find something fun. Add it to the pack.<br>Let's see what we can build.</p></div>
+      <div class="world-art" aria-hidden="true"><div class="world-orbit"></div><svg viewBox="0 0 300 250"><defs><linearGradient id="island-top" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#d0ed95"/><stop offset="1" stop-color="#a6d56b"/></linearGradient></defs><path d="m50 137 95-55 108 61-95 55Z" fill="url(#island-top)"/><path d="M50 137v34l108 62v-35Z" fill="#6a8855"/><path d="m158 198 95-55v34l-95 56Z" fill="#456346"/><path d="m50 149 108 62 95-55v10l-95 55-108-62Z" fill="#415640" opacity=".5"/><path d="m96 108 18-10 19 11-19 11Z" fill="#9a704b"/><path d="M114 120v37l19-11v-37Z" fill="#70553d"/><path d="m96 108 18 12v37l-18-11Z" fill="#a7784c"/><path d="m70 58 45-26 45 26-45 26Z" fill="#a9d775"/><path d="M70 58v50l45 26V84Z" fill="#739e52"/><path d="m115 84 45-26v50l-45 26Z" fill="#547d47"/><path d="m158 116 25-14 30 17-25 15Z" fill="#e7e7d6"/><path d="M158 116v31l30 17v-30Z" fill="#a9b6a1"/><path d="m188 134 25-15v31l-25 14Z" fill="#7c8e7c"/><path d="m210 56 5 13 13 5-13 5-5 13-5-13-13-5 13-5Z" fill="#c8f87a"/><path d="m69 194 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z" fill="#c8f87a"/></svg><span>EST. WHENEVER WE ALL LOG ON.</span></div>
+    </section>
+
+    @if (loading() && !status()) {
+      <div class="loading-state" role="status"><mat-spinner diameter="30"/><span>Connecting to our world...</span></div>
+    }
+
+    @if (status(); as current) {
+      @if (!authorized()) {
+        <div class="notice invitation-notice" animate.enter="enter-up"><app-icon name="link"/><div><strong>A little link gets you in.</strong><p>Open your friend invitation to add mods, publish a release, or run the server. No account needed.</p></div></div>
+      }
+
+      <section class="pack-overview" aria-label="Modpack overview" animate.enter="enter-up">
+        <div class="pack-identity"><span class="pack-icon"><app-icon name="cube"/></span><div><span class="small-label">THE CURRENT PACK</span><h2>{{ current.pack.name || 'Our new modpack' }}</h2></div></div>
+        <dl class="pack-facts"><div><dt>MINECRAFT</dt><dd>{{ current.pack.minecraftVersion || 'Not configured' }}</dd></div><div><dt>LOADER</dt><dd class="capitalize">{{ current.pack.loader || 'Not configured' }}</dd></div><div><dt>DRAFT VERSION</dt><dd>{{ current.pack.version || 'Not configured' }}</dd></div><div><dt>MODS</dt><dd>{{ mods().length | number }}</dd></div></dl>
+      </section>
+
+      <div class="workshop-layout">
+        <section class="workspace-panel" aria-label="Manage the modpack">
+          <mat-tab-group [selectedIndex]="tab()" (selectedIndexChange)="tab.set($event)" animationDuration="220ms" dynamicHeight>
+            <mat-tab label="Discover mods">
+              <div class="tab-content">
+                <div class="tab-heading"><div><p class="small-label">THE POSSIBILITIES ARE ENDLESS</p><h2>What are we adding?</h2></div><span class="source-label">via CurseForge</span></div>
+                <mat-form-field appearance="outline" class="search-field" subscriptSizing="dynamic"><mat-label>Search CurseForge mods</mat-label><app-icon matPrefix name="search"/><input matInput [formControl]="search" placeholder="Try backpacks, magic, or create" autocomplete="off" maxlength="100" [readonly]="!current.capabilities.curseforgeSearch"/>@if (search.value) { <button matSuffix mat-icon-button (click)="search.setValue('')" aria-label="Clear search"><app-icon name="close"/></button> }</mat-form-field>
+                @if (searching()) { <mat-progress-bar mode="indeterminate" aria-label="Searching for mods"/> }
+
+                @if (!current.capabilities.curseforgeSearch) {
+                  <div class="empty-state setup-state"><span class="empty-icon"><app-icon name="link"/></span><h3>Connect the good stuff.</h3><p>CurseForge search is ready once the host adds a CurseForge API key. Your pack will live here.</p><span class="small-label">WAITING FOR HOST SETUP</span></div>
+                } @else if (searchError()) {
+                  <div class="search-error" role="alert"><app-icon name="search"/><p>{{ searchError() }}</p></div>
+                } @else if (!searched()) {
+                  <div class="search-suggestions"><span>Start somewhere:</span>@for (query of ['Backpacks', 'Magic', 'Building', 'Exploration']; track query) { <button (click)="setQuery(query)">{{ query }} <app-icon name="plus"/></button> }</div>
+                  <div class="empty-state discovery-empty"><span class="empty-icon"><app-icon name="spark"/></span><h3>A small idea. A very different world.</h3><p>Search for a mod to get started. Compatible files are selected for our Minecraft version and loader.</p></div>
+                } @else if (!searching() && searchResults().length === 0) {
+                  <div class="empty-state"><span class="empty-icon"><app-icon name="search"/></span><h3>No mods found.</h3><p>Try a different name or a broader search. Only mods that match the pack are included.</p></div>
+                }
+
+                <div class="mod-results" aria-live="polite">
+                  @for (mod of searchResults(); track mod.id) {
+                    <article class="mod-card" animate.enter="enter-up" animate.leave="leave"><div class="mod-avatar">@if (mod.logoUrl) { <img [src]="mod.logoUrl" alt="" loading="lazy" referrerpolicy="no-referrer"/> } @else { <app-icon name="cube"/> }</div><div class="mod-info"><h3>@if (mod.websiteUrl) { <a [href]="mod.websiteUrl" target="_blank" rel="noopener noreferrer">{{ mod.name }} <app-icon name="arrow-up-right"/></a> } @else { {{ mod.name }} }</h3><p>{{ mod.summary }}</p><span class="mod-metadata"><app-icon name="download"/> {{ mod.downloadCount | number }} downloads @if (mod.version) { <span>· {{ mod.version }}</span> }</span></div><button mat-icon-button [class.mod-added]="modIds().has(mod.id)" [disabled]="!!busy() || !authorized() || modIds().has(mod.id) || !!connectionError()" (click)="addMod(mod)" [attr.aria-label]="modIds().has(mod.id) ? mod.name + ' is already in the pack' : 'Add ' + mod.name" [matTooltip]="modIds().has(mod.id) ? 'In your pack' : 'Add to pack'">@if (busy() === 'add:' + mod.id) { <mat-spinner diameter="20"/> } @else { <app-icon [name]="modIds().has(mod.id) ? 'check' : 'plus'"/> }</button></article>
+                  }
+                </div>
+              </div>
+            </mat-tab>
+
+            <mat-tab [label]="'Our pack (' + mods().length + ')'">
+              <div class="tab-content"><div class="tab-heading"><div><p class="small-label">THE NEXT ADVENTURE</p><h2>Made for our world.</h2></div><button mat-stroked-button (click)="exportPack()" [disabled]="!authorized() || !!busy() || !mods().length || !!connectionError()">Export <app-icon name="download"/></button></div>
+                <p class="section-description">This is our draft. Changes go live when we publish a release and update the server.</p>
+                @if (!mods().length) { <div class="empty-state"><span class="empty-icon"><app-icon name="cube"/></span><h3>A fresh start.</h3><p>No mods in the pack yet. Find the first one and make this world our own.</p><button mat-flat-button (click)="tab.set(0)">Discover mods <app-icon name="arrow-right"/></button></div> }
+                <div class="mod-results">@for (mod of mods(); track mod.id) { <article class="mod-card selected-mod" animate.enter="enter-up" animate.leave="leave"><div class="mod-avatar">@if (mod.logoUrl) { <img [src]="mod.logoUrl" alt="" loading="lazy" referrerpolicy="no-referrer"/> } @else { <app-icon name="cube"/> }</div><div class="mod-info"><h3>{{ mod.name }}</h3><p>{{ mod.summary }}</p><span class="mod-metadata">{{ mod.version || 'Compatible file selected' }} @if (mod.fileId) { <span>· File {{ mod.fileId }}</span> }</span></div><button mat-icon-button [disabled]="!!busy() || !authorized() || !!connectionError()" (click)="removeMod(mod)" [attr.aria-label]="'Remove ' + mod.name" matTooltip="Remove from draft"><app-icon name="close"/></button></article> }</div>
+              </div>
+            </mat-tab>
+
+            <mat-tab label="Releases">
+              <div class="tab-content"><div class="tab-heading"><div><p class="small-label">READY WHEN WE ARE</p><h2>Send it into the world.</h2></div><app-icon name="spark"/></div><p class="section-description">Publish the draft to CurseForge so everyone can install the same version.</p>
+                <div class="inline-notice"><app-icon name="link"/><p>CurseForge requires an unchanged App export. Before publishing, the host must export a matching profile in the CurseForge App and configure that ZIP. The draft manifest alone is not a publishable pack.</p></div>
+                @if (!current.capabilities.publish) { <div class="inline-notice"><app-icon name="link"/><p>Publishing also needs an owned CurseForge project and author upload token. These are not connected yet.</p></div> }
+                <form class="release-form" (submit)="$event.preventDefault(); publish()"><mat-form-field appearance="outline"><mat-label>Release name</mat-label><input matInput [formControl]="displayName" placeholder="Our first adventure" maxlength="100"/>@if (displayName.touched && displayName.hasError('required')) { <mat-error>Give this release a name.</mat-error> }</mat-form-field><mat-form-field appearance="outline"><mat-label>What changed?</mat-label><textarea matInput [formControl]="changelog" rows="4" placeholder="New mods, fixes, and anything the group should know." maxlength="5000"></textarea>@if (changelog.touched && changelog.hasError('required')) { <mat-error>Add a short note for your friends.</mat-error> }</mat-form-field><div class="release-form-footer"><span>{{ mods().length }} mods in this draft</span><button mat-flat-button type="submit" [disabled]="!authorized() || !current.capabilities.publish || !!busy() || !mods().length || !!connectionError()">{{ busy() === 'publish' ? 'Publishing...' : 'Publish release' }} <app-icon name="arrow-up-right"/></button></div></form>
+                <div class="release-history"><h3>Release history <span>{{ releases().length }}</span></h3>@if (!releases().length) { <p class="quiet-empty">No releases yet. Every great world starts somewhere.</p> } @for (release of releases(); track $index) { <article class="release-item"><span class="release-marker"><app-icon name="cube"/></span><div><h4>{{ release.displayName || release.version || 'Modpack release' }}</h4><p>{{ release.createdAt ? (release.createdAt | date:'mediumDate') : 'Date unavailable' }} @if (release.status) { <span>· {{ release.status }}</span> }</p>@if (release.changelog) { <p class="release-notes">{{ release.changelog }}</p> }</div>@if (release.url) { <a mat-icon-button [href]="release.url" target="_blank" rel="noopener noreferrer" aria-label="View release on CurseForge"><app-icon name="arrow-up-right"/></a> }</article> }</div>
+              </div>
+            </mat-tab>
+
+            <mat-tab label="Server logs">
+              <div class="tab-content"><div class="tab-heading"><div><p class="small-label">UNDER THE SURFACE</p><h2>The latest from the server.</h2></div><button mat-icon-button (click)="loadLogs()" [disabled]="!authorized() || !!connectionError()" aria-label="Refresh server logs"><app-icon name="refresh"/></button></div><p class="section-description">Recent output from the Minecraft process. Logs are available to invited friends.</p>@if (logsError()) { <p class="search-error" role="alert">{{ logsError() }}</p> } @if (!logsLoaded()) { <div class="empty-state"><span class="empty-icon"><app-icon name="terminal"/></span><h3>A look behind the blocks.</h3><p>Load the latest logs to check startup, updates, or a problem with a mod.</p><button mat-stroked-button (click)="loadLogs()" [disabled]="!authorized() || !!connectionError()">Load server logs</button></div> } @else { <pre class="server-logs" tabindex="0" aria-label="Minecraft server log output">{{ logs().length ? logs().join('\n') : 'No server output yet.' }}</pre> }</div>
+            </mat-tab>
+          </mat-tab-group>
+        </section>
+
+        <aside class="world-sidebar">
+          <section class="server-card" aria-labelledby="server-card-title">
+            <div class="card-title"><span class="small-label" id="server-card-title">OUR LITTLE CORNER OF THE INTERNET</span><app-icon name="server"/></div>
+            <div class="server-status"><span class="server-status-dot" [class.is-online]="serverRunning()" [class.is-transitioning]="serverTransitioning()"></span><h2 class="capitalize">{{ current.server.state || 'Unknown' }}</h2></div>
+            <p class="server-description">{{ serverTransitioning() ? 'Getting things ready. Hang tight.' : serverRunning() ? 'The world is waiting. Come on in.' : 'A little quiet. The next adventure can wait.' }}</p>
+            <div class="server-address"><div><span class="small-label">SERVER ADDRESS</span><code>{{ current.server.address || 'mc.aron.best' }}</code></div><button mat-icon-button (click)="copyAddress()" aria-label="Copy Minecraft server address" matTooltip="Copy address"><app-icon name="copy"/></button></div>
+            <dl class="server-facts"><div><dt>Uptime</dt><dd>{{ uptime() }}</dd></div><div><dt>Installed version</dt><dd>{{ current.server.state === 'not-installed' ? 'Not installed' : current.server.version || 'Not installed' }}</dd></div><div><dt>Last backup</dt><dd>{{ lastBackup() ? (lastBackup() | date:'MMM d, h:mm a') : current.server.lastBackup ? 'Backup available' : 'No backup yet' }}</dd></div></dl>
+            @if (!current.capabilities.server) { <p class="server-setup-note">The host is finishing server setup. Controls will be ready when it is configured.</p> }
+            <div class="server-primary-actions">@if (!serverRunning()) { <button mat-flat-button (click)="act('start')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()">Start server <app-icon name="play"/></button> } @else { <button mat-flat-button (click)="act('restart')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()">Restart server <app-icon name="refresh"/></button> }<button mat-stroked-button (click)="act('stop')" [disabled]="!serverReady() || !!busy() || !serverRunning() || !!connectionError()" aria-label="Stop Minecraft server" matTooltip="Stop server"><app-icon name="stop"/></button></div><div class="server-secondary-actions"><button mat-button (click)="act('backup')" [disabled]="!serverReady() || !!busy() || serverTransitioning() || !!connectionError()"><app-icon name="backup"/> Back up</button><button mat-button (click)="act('update')" [disabled]="!serverReady() || !current.capabilities.update || !!busy() || serverTransitioning() || !!connectionError()"><app-icon name="download"/> Update</button></div>@if (!current.capabilities.update) { <p class="server-setup-note">Updates will be available after the host connects CurseForge and configures a published modpack project.</p> }@if (busy().startsWith('server:')) { <div class="action-progress" role="status"><mat-spinner diameter="16"/><span>Working on it...</span></div> }
+          </section>
+
+          @if (authorized() && activity().length) {
+            <section class="activity-card" aria-label="Recent workshop activity">
+              <span class="small-label">RECENT ACTIVITY</span>
+              <ol>
+                @for (event of activity(); track $index) {
+                  <li><p>{{ event.message }}</p>@if (event.timestamp) { <time>{{ event.timestamp | date:'h:mm a' }}</time> }</li>
+                }
+              </ol>
+            </section>
+          }
+
+          <section class="how-it-works"><span class="small-label">FROM DRAFT TO SERVER</span><ol><li><span>01</span><div><h3>Choose mods.</h3><p>Search CurseForge and add compatible files to the draft.</p></div></li><li><span>02</span><div><h3>Export and publish.</h3><p>The host exports a matching profile from the CurseForge App. Submit it here for review.</p></div></li><li><span>03</span><div><h3>Update and play.</h3><p>Once approved, update the server and install the same version on your client.</p></div></li></ol></section>
+          <p class="sidebar-footnote"><app-icon name="shield"/> A shared space for friends.<br>Keep your invitation link between us.</p>
+        </aside>
+      </div>
+    }
+    @if (!status() && !loading()) { <div class="offline-empty"><span class="empty-icon"><app-icon name="server"/></span><h2>Every world needs a home.</h2><p>The workshop service is not available yet. Once the host starts it, the modpack and server controls will appear here.</p><button mat-stroked-button (click)="refresh()">Check connection <app-icon name="refresh"/></button></div> }
+  </main>
+  <footer class="workshop-footer"><span>THE WORKSHOP</span><span>Less setup. More getting lost together.</span><span>mc.aron.best</span></footer>
+</div>

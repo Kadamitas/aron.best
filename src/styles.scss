@@ -1,0 +1,52 @@
+@use '@angular/material' as mat;
+
+html {
+  color-scheme: dark;
+  @include mat.theme((
+    color: (theme-type: dark, primary: mat.$green-palette, tertiary: mat.$blue-palette),
+    typography: (plain-family: 'Arial, Helvetica, sans-serif', brand-family: 'Arial, Helvetica, sans-serif', bold-weight: 700, medium-weight: 600, regular-weight: 400),
+    density: 0
+  ));
+  scroll-behavior: smooth;
+  scroll-padding-top: 24px;
+  --mat-sys-primary: #c8f87a;
+  --mat-sys-on-primary: #1a2511;
+  --mat-sys-primary-container: #354626;
+  --mat-sys-on-primary-container: #d4f2b4;
+  --mat-sys-surface: #1d2024;
+  --mat-sys-surface-container: #24282d;
+  --mat-sys-surface-container-high: #2b3035;
+  --mat-sys-on-surface: #f0f1ee;
+  --mat-sys-on-surface-variant: #b6bbb4;
+  --mat-sys-outline: #747b72;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: #15171a; color: #f0f1ee; font-family: Arial, Helvetica, sans-serif; font-size: 16px; -webkit-font-smoothing: antialiased; }
+button, input, textarea { font: inherit; }
+button, a, input, textarea { -webkit-tap-highlight-color: transparent; }
+a { color: inherit; text-decoration: none; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+button, a { touch-action: manipulation; }
+::selection { background: #c8f87a; color: #15171a; }
+:focus-visible { outline: 3px solid #c8f87a; outline-offset: 5px; }
+h1, h2, h3, p { margin-top: 0; }
+.skip-link { position: fixed; left: 16px; top: -100px; z-index: 1000; padding: 14px 20px; background: #c8f87a; color: #15171a; border-radius: 8px; }
+.skip-link:focus { top: 16px; }
+.eyebrow { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: .12em; line-height: 1.6; }
+.muted { color: #9a9da2; }
+.status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #c8f87a; margin-right: 10px; box-shadow: 0 0 0 4px #c8f87a0c; }
+.mat-mdc-button-base app-icon { margin-left: 8px; }
+.mat-mdc-button-base { letter-spacing: 0 !important; }
+.lime-button { --mat-sys-primary: #c8f87a; --mat-sys-on-primary: #1a2511; }
+.enter-up { animation: enter-up .7s cubic-bezier(.16, 1, .3, 1) both; }
+.enter-art { animation: enter-art 1s cubic-bezier(.16, 1, .3, 1) both; }
+.leave { animation: leave .18s ease both; }
+@keyframes enter-up { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes enter-art { from { opacity: 0; transform: translateY(20px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes leave { to { opacity: 0; transform: scale(.98); } }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
