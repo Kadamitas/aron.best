@@ -31,7 +31,7 @@ if (!installed) {
 const propertiesPath = path.join(directory, 'server.properties');
 if (!await access(propertiesPath).then(() => true, () => false)) await writeFile(propertiesPath, [
   'server-ip=127.0.0.1', 'server-port=25566', 'online-mode=true', 'enable-rcon=false', 'enable-query=false',
-  'max-players=12', 'view-distance=8', 'simulation-distance=6', 'motd=Aron & friends', 'difficulty=normal',
+  'max-players=12', 'view-distance=12', 'simulation-distance=8', 'motd=Aron & friends', 'difficulty=normal',
   'spawn-protection=16', 'network-compression-threshold=256', 'rate-limit=0', 'sync-chunk-writes=true',
   'max-tick-time=60000', 'white-list=false', '',
 ].join('\n'), { mode: 0o600 });
