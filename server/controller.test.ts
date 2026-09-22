@@ -38,6 +38,9 @@ test('controller authentication, schemas and container boundary reject unsafe re
       assert.equal((await setup.app.inject({ url })).statusCode, 401);
     }
     assert.equal((await setup.app.inject({ method: 'POST', url: '/action', headers: authorization, payload: { action: 'exec', command: 'id' } })).statusCode, 400);
+    assert.equal((await setup.app.inject({ method: 'POST', url: '/command', payload: { command: 'list' } })).statusCode, 401);
+    assert.equal((await setup.app.inject({ method: 'POST', url: '/command', headers: authorization, payload: { command: 'list', extra: true } })).statusCode, 400);
+    assert.equal((await setup.app.inject({ method: 'POST', url: '/command', headers: authorization, payload: { command: 'list' } })).statusCode, 409);
     assert.equal((await setup.app.inject({ method: 'POST', url: '/action', headers: authorization, payload: { action: 'update', downloads: [{ localPath: '/etc/passwd' }] } })).statusCode, 400);
     const write = await setup.app.inject({ method: 'PUT', url: '/workspace/text', headers: authorization, payload: { path: 'config/settings.json', contents: '{}', revision: 'wrong' } });
     assert.equal(write.statusCode, 409);

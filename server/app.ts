@@ -8,7 +8,7 @@ import staticFiles from '@fastify/static';
 import { z } from 'zod';
 import { CurseForgeClient } from './curseforge.js';
 import { PackService } from './modpack.js';
-import { MinecraftServer, type MinecraftDependencies } from './minecraft.js';
+import { MinecraftServer, type MinecraftDependencies, normalizeConsoleCommand } from './minecraft.js';
 import { IpAccess } from './ip-access.js';
 import { MinecraftGateway } from './minecraft-gateway.js';
 import { LocalProfileService, validateProfilePath, type LocalProfileSnapshot } from './local-profile.js';
@@ -425,6 +425,14 @@ export async function createApp(configuration = readConfiguration(), dependencie
     const archive = await remote.downloadSavedBackup(profileId, id);
     reply.raw.once('close', () => archive.stream.destroy());
     return reply.type('application/gzip').header('Content-Disposition', `attachment; filename="dictionary-minecraft-backup-${id}.tar.gz"`).header('Content-Length', archive.size).send(archive.stream);
+  });
+  app.post('/api/server/command', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async request => {
+    const { command } = z.object({ command: z.string().min(1).max(300) }).strict().parse(request.body);
+    const line = normalizeConsoleCommand(command);
+    await remote?.assertProfile();
+    if (remote) await remote.command(line); else minecraft.command(line);
+    record(`Console command: ${line.slice(0, 120)}`);
+    return { accepted: true };
   });
   app.post('/api/server/backups', { config: { rateLimit: { max: 4, timeWindow: '10 minutes' } } }, async (request, reply) => {
     z.object({}).strict().parse(request.body);

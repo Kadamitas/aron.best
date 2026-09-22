@@ -86,6 +86,10 @@ export class ControllerClient {
     await this.refresh();
   }
 
+  async command(command: string): Promise<void> {
+    await this.json('/command', 'POST', { command });
+  }
+
   readonly workspace = {
     list: (): ReturnType<ModpackFiles['list']> => this.json('/workspace/files'),
     listMods: (): ReturnType<ModpackFiles['listMods']> => this.json('/workspace/mods'),

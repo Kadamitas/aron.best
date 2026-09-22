@@ -14,6 +14,18 @@ import { BackupObjects, maximumBackupManifestBytes, validateBackupObjectManifest
 /** A mod to stage: either a CurseForge CDN download or a verified copy from the host's CurseForge App profile. */
 export interface ModDownload { modId: number; fileId: number; fileName: string; url?: string; localPath?: string; hashes: { algo: number; value: string }[]; fileLength: number }
 export type MaintenanceAction = 'start' | 'stop' | 'restart' | 'backup' | 'update' | 'sync-profile';
+/**
+ * Console commands are single printable lines. A leading slash is dropped because the server console
+ * takes bare commands, and stop is refused so the controller always owns shutdown and its backups.
+ */
+export function normalizeConsoleCommand(line: string): string {
+  const command = line.trim().replace(/^\//, '');
+  if (!command || command.length > 256 || /[\x00-\x1f\x7f]/.test(command)) {
+    throw Object.assign(new Error('Enter one command of up to 256 printable characters.'), { statusCode: 400 });
+  }
+  if (/^stop\b/i.test(command)) throw Object.assign(new Error('Use the Stop button so the server shuts down with a backup.'), { statusCode: 409 });
+  return command;
+}
 const describeAction = (action: MaintenanceAction) => action === 'sync-profile' ? 'App pack sync' : `Server ${action}`;
 type ServerState = 'not-installed' | 'stopped' | 'starting' | 'running' | 'stopping' | 'updating' | 'failed';
 const backupItems = ['world', 'mods', 'config', 'defaultconfigs', 'kubejs', 'scripts', 'datapacks', 'resourcepacks', 'shaderpacks', 'server.properties', 'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json', 'installed-mods.json', 'installation.json', 'eula.txt'];
@@ -257,6 +269,16 @@ export class MinecraftServer {
   }
 
   async shutdown() { this.shuttingDown = true; await this.stop(); }
+
+  /** Send one console command to the running server, exactly as if typed at its console. */
+  command(line: string): void {
+    const command = normalizeConsoleCommand(line);
+    const child = this.process;
+    if (!child || this.state !== 'running') throw Object.assign(new Error('Start the server before sending console commands.'), { statusCode: 409 });
+    if (!child.stdin.writable || child.stdin.destroyed) throw Object.assign(new Error('The server is not accepting console input right now.'), { statusCode: 409 });
+    this.log(`> ${command}`);
+    child.stdin.write(`${command}\n`);
+  }
   private async stop() {
     const child = this.process;
     if (!child) return;

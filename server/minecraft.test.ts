@@ -4,7 +4,7 @@ import { link, mkdtemp, mkdir, open, readFile, readdir, rm, symlink, writeFile }
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { MinecraftServer } from './minecraft.js';
+import { MinecraftServer, normalizeConsoleCommand } from './minecraft.js';
 import { BackupObjects } from './backup-objects.js';
 
 const runningServer = `
@@ -520,5 +520,28 @@ test('backup storage rejects a symlinked parent and does not expose linked manif
     await symlink(path.join(outside, 'manifest'), path.join(backups, 'untrusted', 'backup.json'));
     await setup.server.initialize();
     assert.equal(setup.server.status().lastBackup, null);
+  } finally { await setup.dispose(); }
+});
+
+test('console commands reach the running server as typed lines and are refused otherwise', async () => {
+  const echoServer = `
+    process.stdout.write('Done (0.01s)!\\n');
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', data => { process.stdout.write('got ' + data); if (data.includes('stop')) process.exit(0); });
+  `;
+  const setup = await fixture({ launch: (_command, _arguments, options) => spawn(process.execPath, ['-e', echoServer], { ...options, stdio: 'pipe' }) });
+  try {
+    assert.throws(() => setup.server.command('list'), { statusCode: 409 });
+    await setup.server.action('start');
+    setup.server.command('/say hello');
+    const deadline = Date.now() + 5_000;
+    while (!setup.server.logs().some(line => line.includes('got say hello')) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+    const logs = setup.server.logs();
+    assert.ok(logs.includes('> say hello'), logs.join('\n'));
+    assert.ok(logs.some(line => line.includes('got say hello')), logs.join('\n'));
+    assert.throws(() => setup.server.command('stop'), { statusCode: 409 });
+    assert.throws(() => setup.server.command(''), { statusCode: 400 });
+    assert.throws(() => normalizeConsoleCommand('say hi\nstop'), { statusCode: 400 });
+    assert.equal(normalizeConsoleCommand('  /op Someone  '), 'op Someone');
   } finally { await setup.dispose(); }
 });

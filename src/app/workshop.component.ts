@@ -509,6 +509,39 @@ export class WorkshopComponent {
     if (!this.destroyRef.destroyed) await this.refresh(false);
   }
 
+  readonly consoleInput = new FormControl('', { nonNullable: true });
+  readonly consoleSending = signal(false);
+  private readonly consoleHistory: string[] = [];
+  private consoleCursor = 0;
+  readonly consoleReady = computed(() => this.authorized() && this.serverRunning() && !this.connectionError());
+
+  /** Send the typed command to the server console; its output arrives through the live log. */
+  async sendCommand(): Promise<void> {
+    const command = this.consoleInput.value.trim();
+    if (!command || !this.consoleReady() || this.consoleSending()) return;
+    this.consoleSending.set(true);
+    try {
+      await this.api.serverCommand(command);
+      if (this.consoleHistory.at(-1) !== command) this.consoleHistory.push(command);
+      if (this.consoleHistory.length > 50) this.consoleHistory.shift();
+      this.consoleCursor = this.consoleHistory.length;
+      this.consoleInput.setValue('');
+      if (!this.live()) void this.loadLogs();
+    } catch (error) {
+      this.snack.open(errorMessage(error), 'Got it', { duration: 6_000 });
+    } finally { this.consoleSending.set(false); }
+  }
+
+  /** Arrow keys walk through previously sent commands like a real console. */
+  consoleHistoryKey(event: KeyboardEvent): void {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    const next = this.consoleCursor + (event.key === 'ArrowUp' ? -1 : 1);
+    if (next < 0 || next > this.consoleHistory.length) return;
+    this.consoleCursor = next;
+    this.consoleInput.setValue(this.consoleHistory[next] ?? '');
+  }
+
   async downloadPack(): Promise<void> {
     if (!this.downloadReady()) return;
     await this.perform('download', async () => {

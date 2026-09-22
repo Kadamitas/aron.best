@@ -209,6 +209,10 @@ export class WorkshopApi {
     return firstValueFrom(this.http.post('/api/pack/import-local', {}, { headers: this.headers }));
   }
 
+  serverCommand(command: string): Promise<unknown> {
+    return firstValueFrom(this.http.post('/api/server/command', { command }, { headers: this.headers }));
+  }
+
   serverAction(action: ServerAction): Promise<unknown> {
     return firstValueFrom(this.http.post('/api/server/action', { action }, { headers: this.headers }));
   }

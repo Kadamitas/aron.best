@@ -407,6 +407,11 @@ export async function createController(configuration = readControllerConfigurati
     }, false, activeRuntime, true, labels[body.action]);
     return { completed: true };
   });
+  app.post('/command', async request => {
+    const { command } = z.object({ command: z.string().min(1).max(300) }).strict().parse(request.body);
+    activeRuntime.server.command(command);
+    return { accepted: true };
+  });
   app.post('/backups', async (request, reply) => {
     z.object({}).strict().parse(request.body);
     assertIsolated();
