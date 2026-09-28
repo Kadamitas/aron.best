@@ -18,14 +18,14 @@
     "invite": "node --import tsx scripts/invite.ts"
   },
   "dependencies": {
-    "@angular/cdk": "22.1.7",
-    "@angular/common": "22.1.7",
-    "@angular/compiler": "22.1.7",
-    "@angular/core": "22.1.7",
-    "@angular/forms": "22.1.7",
-    "@angular/material": "22.1.7",
-    "@angular/platform-browser": "22.1.7",
-    "@angular/router": "22.1.7",
+    "@angular/cdk": "22.2.0",
+    "@angular/common": "22.2.0",
+    "@angular/compiler": "22.2.0",
+    "@angular/core": "22.2.0",
+    "@angular/forms": "22.2.0",
+    "@angular/material": "22.2.0",
+    "@angular/platform-browser": "22.2.0",
+    "@angular/router": "22.2.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/static": "10.1.4",
@@ -36,13 +36,13 @@
     "zod": "^4.1.11"
   },
   "devDependencies": {
-    "@angular/build": "22.1.8",
-    "@angular/cli": "22.1.8",
-    "@angular/compiler-cli": "22.1.7",
+    "@angular/build": "22.2.0",
+    "@angular/cli": "22.2.0",
+    "@angular/compiler-cli": "22.2.0",
     "@playwright/test": "^1.55.0",
     "@types/node": "^26.0.0",
     "@types/yauzl": "^2.10.3",
     "tsx": "^4.20.5",
-    "typescript": "~6.0.2"
+    "typescript": "~7.0.2"
   }
 }
