@@ -28,7 +28,7 @@
     "@angular/router": "22.1.7",
     "@fastify/helmet": "^13.0.2",
     "@fastify/rate-limit": "^10.3.0",
-    "@fastify/static": "10.1.4",
+    "@fastify/static": "10.1.5",
     "fastify": "^5.6.0",
     "rxjs": "~7.8.2",
     "tslib": "^2.8.1",
